@@ -8,7 +8,8 @@ const TOKEN = process.env.TOKEN;
 const TARGET_USER_ID = process.env.TARGET_USER_ID;
 
 const schedule = require('./schedule');
-const getWeather = require('./getWeather'); // 天気取得を追加
+const getWeather = require('./getWeather');
+const getUpcomingTasks = require('./getNotionTasks');
 
 const client = new Client({
   intents: [GatewayIntentBits.DirectMessages, GatewayIntentBits.MessageContent],
@@ -17,7 +18,6 @@ const client = new Client({
 client.once('ready', async () => {
   console.log(`Bot started as ${client.user.tag}`);
 
-  // ✅ 起動時にテスト送信
   try {
     const user = await client.users.fetch(TARGET_USER_ID);
     const today = dayjs();
@@ -25,6 +25,7 @@ client.once('ready', async () => {
     const todaySchedule = schedule[dayLabel] || ["（時間割未登録）"];
     const scheduleText = todaySchedule.join('\n');
     const weather = await getWeather();
+    const taskText = await getUpcomingTasks();
 
     const message = `✅ テスト送信：今日は ${today.format('MM月DD日（dd）')} です！
 
@@ -37,6 +38,8 @@ ${
 
 📚 今日の時間割:
 ${scheduleText}
+
+${taskText}
 `;
 
     await user.send(message);
@@ -45,7 +48,6 @@ ${scheduleText}
     console.error('DMテスト送信失敗:', err);
   }
 
-  // ✅ 毎朝6:00 JST（＝21:00 UTC）に定期送信
   cron.schedule('0 21 * * *', async () => {
     try {
       const user = await client.users.fetch(TARGET_USER_ID);
@@ -54,6 +56,7 @@ ${scheduleText}
       const todaySchedule = schedule[dayLabel] || ["（時間割未登録）"];
       const scheduleText = todaySchedule.join('\n');
       const weather = await getWeather();
+      const taskText = await getUpcomingTasks();
 
       const message = `おはようございます！今日は ${today.format('MM月DD日（dd）')} です！
 
@@ -66,6 +69,8 @@ ${
 
 📚 今日の時間割:
 ${scheduleText}
+
+${taskText}
 `;
 
       await user.send(message);
@@ -76,7 +81,6 @@ ${scheduleText}
   });
 });
 
-// ✅ ダミーWebサーバー（Render無料プラン維持用）
 const express = require('express');
 const app = express();
 app.get('/', (req, res) => res.send('Bot is running.'));
