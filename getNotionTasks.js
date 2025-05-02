@@ -1,9 +1,10 @@
-// getNotionTasks.js
 const axios = require('axios');
 const dayjs = require('dayjs');
 
 const NOTION_TOKEN = process.env.NOTION_TOKEN;
 const NOTION_DB_ID = process.env.NOTION_DB_ID;
+
+console.log('▶️ 使用中の NOTION_DB_ID:', NOTION_DB_ID); // ← ここを追加
 
 async function getUpcomingTasks() {
   const today = dayjs().startOf('day');
@@ -18,7 +19,7 @@ async function getUpcomingTasks() {
         filter: {
           and: [
             {
-              property: 'Deadline', // ← あなたの列名に合わせて修正済み
+              property: 'Deadline',
               date: {
                 on_or_after: today.format('YYYY-MM-DD')
               }
@@ -63,7 +64,7 @@ async function getUpcomingTasks() {
 
     return `✅ 直近のタスク:\n${tasks.join('\n')}`;
   } catch (error) {
-    console.error('Notion API エラー:', error.response?.data || error.message);
+    console.error('❌ Notion API エラー:', error.response?.data || error.message);
     return '⚠️ タスクの取得に失敗しました。';
   }
 }
