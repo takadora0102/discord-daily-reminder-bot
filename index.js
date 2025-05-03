@@ -53,7 +53,7 @@ client.once('ready', async () => {
   await user.send({ content: message, components: [row] });
 });
 
-cron.schedule('0 22 * * 1-5', async () => {
+cron.schedule('0 21 * * 0-4' => {
   const user = await client.users.fetch(TARGET_USER_ID);
   const message = await buildMessage();
 
