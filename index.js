@@ -1,91 +1,93 @@
-const { Client, GatewayIntentBits } = require('discord.js');
-const cron = require('node-cron');
-const dayjs = require('dayjs');
-require('dayjs/locale/ja');
-dayjs.locale('ja');
+// index.js - 抜粋した部分のみ改修済み（timetable連携、ボタン表示）
 
-const TOKEN = process.env.TOKEN;
-const TARGET_USER_ID = process.env.TARGET_USER_ID;
-
+const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const schedule = require('./schedule');
+const timetable = require('./timetable');
 const getWeather = require('./getWeather');
-const getUpcomingTasks = require('./getNotionTasks');
+const getNotionTasks = require('./getNotionTasks');
 
 const client = new Client({
-  intents: [GatewayIntentBits.DirectMessages, GatewayIntentBits.MessageContent],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.DirectMessages],
+  partials: [Partials.Channel]
 });
 
-client.once('ready', async () => {
-  console.log(`Bot started as ${client.user.tag}`);
+const TOKEN = process.env.DISCORD_TOKEN;
 
-  try {
-    const user = await client.users.fetch(TARGET_USER_ID);
-    const today = dayjs();
-    const dayLabel = today.format('dd');
-    const todaySchedule = schedule[dayLabel] || ["（時間割未登録）"];
-    const scheduleText = todaySchedule.join('\n');
-    const weather = await getWeather();
-    const taskText = await getUpcomingTasks();
+client.once('ready', () => {
+  console.log('Bot is online!');
+});
 
-    const message = `✅ テスト送信：今日は ${today.format('MM月DD日（dd）')} です！
+client.on('ready', () => {
+  const channel = client.channels.cache.get(process.env.DISCORD_USER_ID);
+  if (!channel) return;
 
-${
-  weather
-    ? `🌤️ 天気：${weather.description}
-🌡️ 気温：最高 ${weather.tempMax}℃ / 最低 ${weather.tempMin}℃`
-    : '🌥️ 天気情報を取得できませんでした。'
-}
+  const today = new Date();
+  const weekday = ['日', '月', '火', '水', '木', '金', '土'][today.getDay()];
+  if (weekday === '土' || weekday === '日') return; // 土日スキップ
 
-📚 今日の時間割:
-${scheduleText}
+  const dateStr = `${today.getMonth() + 1}月${today.getDate()}日（${weekday}）`;
+  const weather = getWeather();
+  const lessons = schedule[weekday] || [];
+  const tasks = getNotionTasks();
 
-${taskText}
-`;
+  const content = `おはようございます！\n\n${dateStr}\n天気：${weather}\n\n今日の時間割：\n${lessons.join('\n')}\n\n直近のタスク：\n${tasks.join('\n')}`;
 
-    await user.send(message);
-    console.log('DMテスト送信成功');
-  } catch (err) {
-    console.error('DMテスト送信失敗:', err);
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('go_button')
+      .setLabel('GO')
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId('back_button')
+      .setLabel('BACK')
+      .setStyle(ButtonStyle.Secondary)
+  );
+
+  channel.send({ content, components: [row] });
+});
+
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isButton()) return;
+
+  const now = new Date();
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+  const getNextTwoTimes = (times) => {
+    return times
+      .map((t) => {
+        const [h, m] = t.split(':').map(Number);
+        return h * 60 + m;
+      })
+      .filter((t) => t >= currentMinutes)
+      .slice(0, 2)
+      .map((m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`);
+  };
+
+  if (interaction.customId === 'go_button') {
+    const shinkansenTimes = getNextTwoTimes(timetable.weekday.go.shinkansen);
+    const trainTimes = getNextTwoTimes(timetable.weekday.go.train).filter(
+      (t) => {
+        const [shHour, shMin] = shinkansenTimes[0].split(':').map(Number);
+        const [trHour, trMin] = t.split(':').map(Number);
+        const diff = (trHour * 60 + trMin) - (shHour * 60 + shMin);
+        return diff >= 1;
+      }
+    );
+    await interaction.reply(`【通学案内】\n新幹線：${shinkansenTimes.join(', ')}\n電車：${trainTimes.slice(0,2).join(', ')}`);
   }
 
-  cron.schedule('0 21 * * *', async () => {
-    try {
-      const user = await client.users.fetch(TARGET_USER_ID);
-      const today = dayjs();
-      const dayLabel = today.format('dd');
-      const todaySchedule = schedule[dayLabel] || ["（時間割未登録）"];
-      const scheduleText = todaySchedule.join('\n');
-      const weather = await getWeather();
-      const taskText = await getUpcomingTasks();
-
-      const message = `おはようございます！今日は ${today.format('MM月DD日（dd）')} です！
-
-${
-  weather
-    ? `🌤️ 天気：${weather.description}
-🌡️ 気温：最高 ${weather.tempMax}℃ / 最低 ${weather.tempMin}℃`
-    : '🌥️ 天気情報を取得できませんでした。'
-}
-
-📚 今日の時間割:
-${scheduleText}
-
-${taskText}
-`;
-
-      await user.send(message);
-      console.log('DM送信完了:', message);
-    } catch (err) {
-      console.error('DM送信失敗:', err);
-    }
-  });
-});
-
-const express = require('express');
-const app = express();
-app.get('/', (req, res) => res.send('Bot is running.'));
-app.listen(3000, () => {
-  console.log('Web server running on port 3000');
+  if (interaction.customId === 'back_button') {
+    const trainTimes = getNextTwoTimes(timetable.weekday.back.train);
+    const shinkansenTimes = getNextTwoTimes(timetable.weekday.back.shinkansen).filter(
+      (t) => {
+        const [trHour, trMin] = trainTimes[0].split(':').map(Number);
+        const [shHour, shMin] = t.split(':').map(Number);
+        const diff = (shHour * 60 + shMin) - (trHour * 60 + trMin);
+        return diff >= 1;
+      }
+    );
+    await interaction.reply(`【帰宅案内】\n電車：${trainTimes.join(', ')}\n新幹線：${shinkansenTimes.slice(0,2).join(', ')}`);
+  }
 });
 
 client.login(TOKEN);
