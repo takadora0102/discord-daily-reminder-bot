@@ -1,4 +1,4 @@
-// 🔧 時刻表ボタン機能：ボタン押下時刻を基準に通学/帰宅案内
+// 🔧 時刻表ボタン機能：正しく現在時刻以降の候補のみ表示する修正版
 
 const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, Events, Partials } = require('discord.js');
 const cron = require('node-cron');
@@ -68,14 +68,14 @@ cron.schedule('0 7 * * 1-5', async () => {
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isButton()) return;
 
-  await interaction.deferReply(); // ボタン応答を一時保留
+  await interaction.deferReply();
 
   const now = dayjs();
   const nowMinutes = now.hour() * 60 + now.minute();
 
   if (interaction.customId === 'go') {
     const sList = timetable.weekday.go.shinkansen.map(parseTime).filter(m => m >= nowMinutes);
-    const tList = timetable.weekday.go.train.map(parseTime);
+    const tList = timetable.weekday.go.train.map(parseTime).filter(m => m >= nowMinutes);
 
     const routes = [];
     for (let sTime of sList) {
@@ -92,7 +92,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
   if (interaction.customId === 'back') {
     const tList = timetable.weekday.back.train.map(parseTime).filter(t => t >= nowMinutes);
-    const sList = timetable.weekday.back.shinkansen.map(parseTime);
+    const sList = timetable.weekday.back.shinkansen.map(parseTime).filter(s => s >= nowMinutes);
 
     const routes = [];
     for (let tTime of tList) {
