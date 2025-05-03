@@ -1,4 +1,4 @@
-// 🔧 時刻表ボタン機能追加バージョン
+// 🔧 時刻表ボタン機能＋到着時間考慮バージョン
 
 const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, Events, Partials } = require('discord.js');
 const cron = require('node-cron');
@@ -32,19 +32,12 @@ const buildMessage = async (prefix = 'おはようございます') => {
     `📚 今日の時間割:\n${scheduleText}\n\n${taskText}`;
 };
 
-const getNextTimes = (nowMinutes, list) => {
-  return list
-    .map(t => {
-      const [h, m] = t.split(':').map(Number);
-      return h * 60 + m;
-    })
-    .filter(m => m >= nowMinutes)
-    .slice(0, 4); // 予備含め4つ取得
+const parseTime = (timeStr) => {
+  const [h, m] = timeStr.split(':').map(Number);
+  return h * 60 + m;
 };
 
-const formatTimes = (times) => {
-  return times.map(m => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`);
-};
+const formatTime = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 
 client.once('ready', async () => {
   console.log(`Bot started as ${client.user.tag}`);
@@ -77,23 +70,40 @@ client.on(Events.InteractionCreate, async interaction => {
 
   const now = dayjs();
   const nowMinutes = now.hour() * 60 + now.minute();
-  let reply = '';
 
   if (interaction.customId === 'go') {
-    const sList = getNextTimes(nowMinutes, timetable.weekday.go.shinkansen);
-    const tList = getNextTimes(nowMinutes, timetable.weekday.go.train)
-      .filter(t => t - sList[0] >= 1);
-    reply = `【通学案内】\n新幹線：${formatTimes(sList).slice(0, 2).join(', ')}\n電車：${formatTimes(tList).slice(0, 2).join(', ')}`;
+    const sList = timetable.weekday.go.shinkansen.map(parseTime).filter(m => m >= nowMinutes);
+    const tList = timetable.weekday.go.train.map(parseTime);
+
+    const routes = [];
+    for (let sTime of sList) {
+      const sArrival = sTime + 8;
+      const candidate = tList.find(t => t >= sArrival + 1);
+      if (candidate) {
+        routes.push(`① 博多南発 ${formatTime(sTime)} 博多発 ${formatTime(candidate)}`);
+        if (routes.length >= 2) break;
+      }
+    }
+    const reply = routes.length ? `【通学案内】\n${routes.join('\n')}` : '適切な通学案が見つかりませんでした。';
+    await interaction.reply(reply);
   }
 
   if (interaction.customId === 'back') {
-    const tList = getNextTimes(nowMinutes, timetable.weekday.back.train);
-    const sList = getNextTimes(nowMinutes, timetable.weekday.back.shinkansen)
-      .filter(s => s - tList[0] >= 1);
-    reply = `【帰宅案内】\n電車：${formatTimes(tList).slice(0, 2).join(', ')}\n新幹線：${formatTimes(sList).slice(0, 2).join(', ')}`;
-  }
+    const tList = timetable.weekday.back.train.map(parseTime).filter(t => t >= nowMinutes);
+    const sList = timetable.weekday.back.shinkansen.map(parseTime);
 
-  await interaction.reply(reply);
+    const routes = [];
+    for (let tTime of tList) {
+      const tArrival = tTime + 20;
+      const candidate = sList.find(s => s >= tArrival + 1);
+      if (candidate) {
+        routes.push(`① 福工大前発 ${formatTime(tTime)} 博多発 ${formatTime(candidate)}`);
+        if (routes.length >= 2) break;
+      }
+    }
+    const reply = routes.length ? `【帰宅案内】\n${routes.join('\n')}` : '適切な帰宅案が見つかりませんでした。';
+    await interaction.reply(reply);
+  }
 });
 
 const express = require('express');
