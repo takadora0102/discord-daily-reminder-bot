@@ -1,4 +1,4 @@
-// 🔧 時刻表ボタン機能：正しく現在時刻以降の候補のみ表示する修正版
+// 🔧 時刻表ボタン機能（JST対応済み）
 
 const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, Events, Partials } = require('discord.js');
 const cron = require('node-cron');
@@ -20,7 +20,7 @@ const client = new Client({
 });
 
 const buildMessage = async (prefix = 'おはようございます') => {
-  const today = dayjs();
+  const today = dayjs().add(9, 'hour');
   const dayLabel = today.format('dd');
   const todaySchedule = schedule[dayLabel] || ['（時間割未登録）'];
   const scheduleText = todaySchedule.join('\n');
@@ -53,7 +53,7 @@ client.once('ready', async () => {
   await user.send({ content: message, components: [row] });
 });
 
-cron.schedule('0 7 * * 1-5', async () => {
+cron.schedule('0 22 * * 1-5', async () => {
   const user = await client.users.fetch(TARGET_USER_ID);
   const message = await buildMessage();
 
@@ -70,7 +70,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
   await interaction.deferReply();
 
-  const now = dayjs();
+  const now = dayjs().add(9, 'hour'); // JSTに変換！
   const nowMinutes = now.hour() * 60 + now.minute();
 
   if (interaction.customId === 'go') {
