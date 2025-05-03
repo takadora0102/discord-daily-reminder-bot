@@ -1,4 +1,4 @@
-// 🔧 時刻表ボタン機能＋到着時間考慮バージョン
+// 🔧 時刻表ボタン機能：ボタン押下時刻を基準に通学/帰宅案内
 
 const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, Events, Partials } = require('discord.js');
 const cron = require('node-cron');
@@ -68,6 +68,8 @@ cron.schedule('0 7 * * 1-5', async () => {
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isButton()) return;
 
+  await interaction.deferReply(); // ボタン応答を一時保留
+
   const now = dayjs();
   const nowMinutes = now.hour() * 60 + now.minute();
 
@@ -80,12 +82,12 @@ client.on(Events.InteractionCreate, async interaction => {
       const sArrival = sTime + 8;
       const candidate = tList.find(t => t >= sArrival + 1);
       if (candidate) {
-        routes.push(`① 博多南発 ${formatTime(sTime)} 博多発 ${formatTime(candidate)}`);
+        routes.push(`博多南発 ${formatTime(sTime)} 博多発 ${formatTime(candidate)}`);
         if (routes.length >= 2) break;
       }
     }
-    const reply = routes.length ? `【通学案内】\n${routes.join('\n')}` : '適切な通学案が見つかりませんでした。';
-    await interaction.reply(reply);
+    const reply = routes.length ? `【通学案内】\n① ${routes[0]}${routes[1] ? `\n② ${routes[1]}` : ''}` : '適切な通学案が見つかりませんでした。';
+    await interaction.editReply(reply);
   }
 
   if (interaction.customId === 'back') {
@@ -97,12 +99,12 @@ client.on(Events.InteractionCreate, async interaction => {
       const tArrival = tTime + 20;
       const candidate = sList.find(s => s >= tArrival + 1);
       if (candidate) {
-        routes.push(`① 福工大前発 ${formatTime(tTime)} 博多発 ${formatTime(candidate)}`);
+        routes.push(`福工大前発 ${formatTime(tTime)} 博多発 ${formatTime(candidate)}`);
         if (routes.length >= 2) break;
       }
     }
-    const reply = routes.length ? `【帰宅案内】\n${routes.join('\n')}` : '適切な帰宅案が見つかりませんでした。';
-    await interaction.reply(reply);
+    const reply = routes.length ? `【帰宅案内】\n① ${routes[0]}${routes[1] ? `\n② ${routes[1]}` : ''}` : '適切な帰宅案が見つかりませんでした。';
+    await interaction.editReply(reply);
   }
 });
 
