@@ -14,7 +14,7 @@ async function fetchTitles(feedUrl, maxItems = 3) {
   const selected = feed.items.slice(0, maxItems);
 
   return selected.map((item, i) =>
-    `**${item.title.trim()}**\n🔗 ${item.link}`
+    `**${item.title.trim()}**\n🔗 <${item.link}>`
   );
 }
 
