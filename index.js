@@ -1,10 +1,9 @@
-// 🔧 時刻表ボタン機能（JST対応済み）
-
 const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, Events, Partials } = require('discord.js');
 const cron = require('node-cron');
 const dayjs = require('dayjs');
 require('dayjs/locale/ja');
 dayjs.locale('ja');
+require('dotenv').config();
 
 const TOKEN = process.env.TOKEN;
 const TARGET_USER_ID = process.env.TARGET_USER_ID;
@@ -13,6 +12,7 @@ const schedule = require('./schedule');
 const getWeather = require('./getWeather');
 const getUpcomingTasks = require('./getNotionTasks');
 const timetable = require('./timetable');
+const { getFormattedNews } = require('./news'); // ニュースモジュール
 
 const client = new Client({
   intents: [GatewayIntentBits.DirectMessages, GatewayIntentBits.MessageContent],
@@ -41,7 +41,6 @@ const formatTime = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${Stri
 
 client.once('ready', async () => {
   console.log(`Bot started as ${client.user.tag}`);
-
   const user = await client.users.fetch(TARGET_USER_ID);
   const message = await buildMessage('✅ テスト送信');
 
@@ -53,31 +52,19 @@ client.once('ready', async () => {
   await user.send({ content: message, components: [row] });
 });
 
-cron.schedule('0 21 * * 0-6', async () => {
-  const user = await client.users.fetch(TARGET_USER_ID);
-  const message = await buildMessage();
-
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('go').setLabel('GO').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('back').setLabel('BACK').setStyle(ButtonStyle.Secondary)
-  );
-
-  await user.send({ content: message, components: [row] });
-});
-
+// 通学案内ボタン（GO/BACK）
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isButton()) return;
-
   await interaction.deferReply();
 
-  const now = dayjs().add(9, 'hour'); // JSTに変換！
+  const now = dayjs().add(9, 'hour');
   const nowMinutes = now.hour() * 60 + now.minute();
 
   if (interaction.customId === 'go') {
     const sList = timetable.weekday.go.shinkansen.map(parseTime).filter(m => m >= nowMinutes);
     const tList = timetable.weekday.go.train.map(parseTime).filter(m => m >= nowMinutes);
-
     const routes = [];
+
     for (let sTime of sList) {
       const sArrival = sTime + 8;
       const candidate = tList.find(t => t >= sArrival + 1);
@@ -86,6 +73,7 @@ client.on(Events.InteractionCreate, async interaction => {
         if (routes.length >= 2) break;
       }
     }
+
     const reply = routes.length ? `【通学案内】\n① ${routes[0]}${routes[1] ? `\n② ${routes[1]}` : ''}` : '適切な通学案が見つかりませんでした。';
     await interaction.editReply(reply);
   }
@@ -93,8 +81,8 @@ client.on(Events.InteractionCreate, async interaction => {
   if (interaction.customId === 'back') {
     const tList = timetable.weekday.back.train.map(parseTime).filter(t => t >= nowMinutes);
     const sList = timetable.weekday.back.shinkansen.map(parseTime).filter(s => s >= nowMinutes);
-
     const routes = [];
+
     for (let tTime of tList) {
       const tArrival = tTime + 20;
       const candidate = sList.find(s => s >= tArrival + 1);
@@ -103,11 +91,31 @@ client.on(Events.InteractionCreate, async interaction => {
         if (routes.length >= 2) break;
       }
     }
+
     const reply = routes.length ? `【帰宅案内】\n① ${routes[0]}${routes[1] ? `\n② ${routes[1]}` : ''}` : '適切な帰宅案が見つかりませんでした。';
     await interaction.editReply(reply);
   }
 });
 
+// 🌐 ニュース配信機能（3回/日）
+async function sendNewsDM(timeLabel) {
+  try {
+    const user = await client.users.fetch(TARGET_USER_ID);
+    const news = await getFormattedNews();
+    const message = `🗞️ **${timeLabel}のニュースまとめ（全5件）**\n\n${news}`;
+    await user.send(message);
+    console.log(`✅ ${timeLabel}のニュースを送信しました`);
+  } catch (err) {
+    console.error(`❌ ${timeLabel}ニュース送信失敗:`, err);
+  }
+}
+
+// JSTの6時/12時/22時に対応するUTCスケジュール
+cron.schedule('0 21 * * 0-6', () => sendNewsDM('朝刊'));  // JST 6:00
+cron.schedule('0 3 * * 0-6',  () => sendNewsDM('昼刊'));  // JST 12:00
+cron.schedule('0 13 * * 0-6', () => sendNewsDM('夜刊'));  // JST 22:00
+
+// Expressサーバー（Render対策）
 const express = require('express');
 const app = express();
 app.get('/', (req, res) => res.send('Bot is running.'));
