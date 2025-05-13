@@ -12,7 +12,7 @@ const schedule = require('./schedule');
 const getWeather = require('./getWeather');
 const getUpcomingTasks = require('./getNotionTasks');
 const timetable = require('./timetable');
-const { getFormattedNews } = require('./news'); // ニュースモジュール
+const { getFormattedNews } = require('./news'); // ニュース取得（OpenAIなし）
 
 const client = new Client({
   intents: [GatewayIntentBits.DirectMessages, GatewayIntentBits.MessageContent],
@@ -52,7 +52,6 @@ client.once('ready', async () => {
   await user.send({ content: message, components: [row] });
 });
 
-// 通学案内ボタン（GO/BACK）
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isButton()) return;
   await interaction.deferReply();
@@ -97,7 +96,7 @@ client.on(Events.InteractionCreate, async interaction => {
   }
 });
 
-// 🌐 ニュース配信機能（3回/日）
+// ニュース配信（無料版：タイトル＋リンクのみ）
 async function sendNewsDM(timeLabel) {
   try {
     const user = await client.users.fetch(TARGET_USER_ID);
@@ -110,12 +109,11 @@ async function sendNewsDM(timeLabel) {
   }
 }
 
-// JSTの6時/12時/22時に対応するUTCスケジュール
+// JSTの6時/12時/22時に対応するUTC時間
 cron.schedule('0 21 * * 0-6', () => sendNewsDM('朝刊'));  // JST 6:00
 cron.schedule('0 3 * * 0-6',  () => sendNewsDM('昼刊'));  // JST 12:00
 cron.schedule('0 13 * * 0-6', () => sendNewsDM('夜刊'));  // JST 22:00
 
-// Expressサーバー（Render対策）
 const express = require('express');
 const app = express();
 app.get('/', (req, res) => res.send('Bot is running.'));
