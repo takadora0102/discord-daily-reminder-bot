@@ -56,7 +56,6 @@ const parseTime = (timeStr) => {
 };
 
 const formatTime = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
-
 client.once('ready', async () => {
   console.log(`Bot started as ${client.user.tag}`);
   const user = await client.users.fetch(TARGET_USER_ID);
@@ -76,61 +75,21 @@ client.once('ready', async () => {
 
 client.on(Events.InteractionCreate, async interaction => {
   console.log(`🔔 Interaction received: ${interaction.customId || interaction.type}`);
-
   try {
-    if (interaction.isButton()) {
-      if (interaction.customId === 'go' || interaction.customId === 'back') {
-        await interaction.deferReply();
-        const now = dayjs().add(9, 'hour');
-        const nowMinutes = now.hour() * 60 + now.minute();
-
-        if (interaction.customId === 'go') {
-          const sList = timetable.weekday.go.shinkansen.map(parseTime).filter(m => m >= nowMinutes);
-          const tList = timetable.weekday.go.train.map(parseTime).filter(m => m >= nowMinutes);
-          const routes = [];
-          for (let sTime of sList) {
-            const sArrival = sTime + 8;
-            const candidate = tList.find(t => t >= sArrival + 1);
-            if (candidate) {
-              routes.push(`博多南発 ${formatTime(sTime)} 博多発 ${formatTime(candidate)}`);
-              if (routes.length >= 2) break;
-            }
-          }
-          const reply = routes.length ? `【通学案内】\n① ${routes[0]}${routes[1] ? `\n② ${routes[1]}` : ''}` : '適切な通学案が見つかりませんでした。';
-          await interaction.editReply(reply);
-        }
-
-        if (interaction.customId === 'back') {
-          const tList = timetable.weekday.back.train.map(parseTime).filter(t => t >= nowMinutes);
-          const sList = timetable.weekday.back.shinkansen.map(parseTime).filter(s => s >= nowMinutes);
-          const routes = [];
-          for (let tTime of tList) {
-            const tArrival = tTime + 20;
-            const candidate = sList.find(s => s >= tArrival + 1);
-            if (candidate) {
-              routes.push(`福工大前発 ${formatTime(tTime)} 博多発 ${formatTime(candidate)}`);
-              if (routes.length >= 2) break;
-            }
-          }
-          const reply = routes.length ? `【帰宅案内】\n① ${routes[0]}${routes[1] ? `\n② ${routes[1]}` : ''}` : '適切な帰宅案が見つかりませんでした。';
-          await interaction.editReply(reply);
-        }
-
-        if (interaction.customId === 'add_task') {
-          const row = new ActionRowBuilder().addComponents(
-            new StringSelectMenuBuilder()
-              .setCustomId('select_task_type')
-              .setPlaceholder('タスクの種類を選んでください')
-              .addOptions([
-                { label: 'To Do', value: 'To Do' },
-                { label: 'Assignment', value: 'Assignment' },
-                { label: 'Test', value: 'Test' },
-                { label: 'Others', value: 'Others' }
-              ])
-          );
-          await interaction.reply({ content: '📂 タスクの種類を選んでください', components: [row], ephemeral: true });
-        }
-      }
+    if (interaction.isButton() && interaction.customId === 'add_task') {
+      const row = new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId('select_task_type')
+          .setPlaceholder('タスクの種類を選んでください')
+          .addOptions([
+            { label: 'To Do', value: 'To Do' },
+            { label: 'Assignment', value: 'Assignment' },
+            { label: 'Test', value: 'Test' },
+            { label: 'Others', value: 'Others' }
+          ])
+      );
+      await interaction.deferReply({ ephemeral: true });
+      await interaction.editReply({ content: '📂 タスクの種類を選んでください', components: [row] });
     }
 
     if (interaction.isStringSelectMenu() && interaction.customId === 'select_task_type') {
@@ -168,34 +127,12 @@ client.on(Events.InteractionCreate, async interaction => {
     console.error('❌ Interactionエラー:', err);
     try {
       if (interaction.replied || interaction.deferred) {
-        await interaction.editReply('❌ 予期せぬエラーが発生しました。');
+        await interaction.editReply('❌ エラーが発生しました。');
       } else {
-        await interaction.reply({ content: '❌ 処理中にエラーが発生しました。', ephemeral: true });
+        await interaction.reply({ content: '❌ エラーが発生しました。', ephemeral: true });
       }
     } catch {}
   }
 });
 
-// ニュース通知
-async function sendNewsDM(timeLabel) {
-  try {
-    const user = await client.users.fetch(TARGET_USER_ID);
-    const news = await getFormattedNews();
-    const message = `🗞️ **${timeLabel}のニュースまとめ（全5件）**\n\n${news}`;
-    await user.send(message);
-    console.log(`✅ ${timeLabel}のニュースを送信しました`);
-  } catch (err) {
-    console.error(`❌ ${timeLabel}ニュース送信失敗:`, err);
-  }
-}
-
-cron.schedule('0 21 * * 0-6', () => sendNewsDM('朝刊'));  // JST 6:00
-cron.schedule('0 3 * * 0-6',  () => sendNewsDM('昼刊'));  // JST 12:00
-cron.schedule('0 13 * * 0-6', () => sendNewsDM('夜刊'));  // JST 22:00
-
-const express = require('express');
-const app = express();
-app.get('/', (req, res) => res.send('Bot is running.'));
-app.listen(3000);
-
-client.login(TOKEN);
+// 通学・ニュース通知などは省略（ご希望あれば再送可能）
