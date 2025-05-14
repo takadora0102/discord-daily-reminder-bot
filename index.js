@@ -25,7 +25,7 @@ const getWeather = require('./getWeather');
 const getUpcomingTasks = require('./getNotionTasks');
 const timetable = require('./timetable');
 const { getFormattedNews } = require('./news');
-const { saveTaskToNotion } = require('./saveToNotion');
+const { saveTaskToNotion } = require('./saveToNotion'); // ✅ 追加済み
 
 const client = new Client({
   intents: [GatewayIntentBits.DirectMessages, GatewayIntentBits.MessageContent],
@@ -69,92 +69,104 @@ client.once('ready', async () => {
   await user.send({ content: message, components: [commuteRow, taskRow] });
 });
 
+// ✅ インタラクション処理 with try/catch
 client.on(Events.InteractionCreate, async interaction => {
-  if (interaction.isButton()) {
-    if (interaction.customId === 'go' || interaction.customId === 'back') {
-      await interaction.deferReply();
-      const now = dayjs().add(9, 'hour');
-      const nowMinutes = now.hour() * 60 + now.minute();
+  try {
+    if (interaction.isButton()) {
+      if (interaction.customId === 'go' || interaction.customId === 'back') {
+        await interaction.deferReply();
+        const now = dayjs().add(9, 'hour');
+        const nowMinutes = now.hour() * 60 + now.minute();
 
-      if (interaction.customId === 'go') {
-        const sList = timetable.weekday.go.shinkansen.map(parseTime).filter(m => m >= nowMinutes);
-        const tList = timetable.weekday.go.train.map(parseTime).filter(m => m >= nowMinutes);
-        const routes = [];
-        for (let sTime of sList) {
-          const sArrival = sTime + 8;
-          const candidate = tList.find(t => t >= sArrival + 1);
-          if (candidate) {
-            routes.push(`博多南発 ${formatTime(sTime)} 博多発 ${formatTime(candidate)}`);
-            if (routes.length >= 2) break;
+        if (interaction.customId === 'go') {
+          const sList = timetable.weekday.go.shinkansen.map(parseTime).filter(m => m >= nowMinutes);
+          const tList = timetable.weekday.go.train.map(parseTime).filter(m => m >= nowMinutes);
+          const routes = [];
+          for (let sTime of sList) {
+            const sArrival = sTime + 8;
+            const candidate = tList.find(t => t >= sArrival + 1);
+            if (candidate) {
+              routes.push(`博多南発 ${formatTime(sTime)} 博多発 ${formatTime(candidate)}`);
+              if (routes.length >= 2) break;
+            }
           }
+          const reply = routes.length ? `【通学案内】\n① ${routes[0]}${routes[1] ? `\n② ${routes[1]}` : ''}` : '適切な通学案が見つかりませんでした。';
+          await interaction.editReply(reply);
         }
-        const reply = routes.length ? `【通学案内】\n① ${routes[0]}${routes[1] ? `\n② ${routes[1]}` : ''}` : '適切な通学案が見つかりませんでした。';
-        await interaction.editReply(reply);
-      }
 
-      if (interaction.customId === 'back') {
-        const tList = timetable.weekday.back.train.map(parseTime).filter(t => t >= nowMinutes);
-        const sList = timetable.weekday.back.shinkansen.map(parseTime).filter(s => s >= nowMinutes);
-        const routes = [];
-        for (let tTime of tList) {
-          const tArrival = tTime + 20;
-          const candidate = sList.find(s => s >= tArrival + 1);
-          if (candidate) {
-            routes.push(`福工大前発 ${formatTime(tTime)} 博多発 ${formatTime(candidate)}`);
-            if (routes.length >= 2) break;
+        if (interaction.customId === 'back') {
+          const tList = timetable.weekday.back.train.map(parseTime).filter(t => t >= nowMinutes);
+          const sList = timetable.weekday.back.shinkansen.map(parseTime).filter(s => s >= nowMinutes);
+          const routes = [];
+          for (let tTime of tList) {
+            const tArrival = tTime + 20;
+            const candidate = sList.find(s => s >= tArrival + 1);
+            if (candidate) {
+              routes.push(`福工大前発 ${formatTime(tTime)} 博多発 ${formatTime(candidate)}`);
+              if (routes.length >= 2) break;
+            }
           }
+          const reply = routes.length ? `【帰宅案内】\n① ${routes[0]}${routes[1] ? `\n② ${routes[1]}` : ''}` : '適切な帰宅案が見つかりませんでした。';
+          await interaction.editReply(reply);
         }
-        const reply = routes.length ? `【帰宅案内】\n① ${routes[0]}${routes[1] ? `\n② ${routes[1]}` : ''}` : '適切な帰宅案が見つかりませんでした。';
-        await interaction.editReply(reply);
-      }
 
-      if (interaction.customId === 'add_task') {
-        const row = new ActionRowBuilder().addComponents(
-          new StringSelectMenuBuilder()
-            .setCustomId('select_task_type')
-            .setPlaceholder('タスクの種類を選んでください')
-            .addOptions([
-              { label: 'To Do', value: 'To Do' },
-              { label: 'Assignment', value: 'Assignment' },
-              { label: 'Test', value: 'Test' },
-              { label: 'Others', value: 'Others' }
-            ])
-        );
-        await interaction.reply({ content: '📂 タスクの種類を選んでください', components: [row], ephemeral: true });
+        if (interaction.customId === 'add_task') {
+          const row = new ActionRowBuilder().addComponents(
+            new StringSelectMenuBuilder()
+              .setCustomId('select_task_type')
+              .setPlaceholder('タスクの種類を選んでください')
+              .addOptions([
+                { label: 'To Do', value: 'To Do' },
+                { label: 'Assignment', value: 'Assignment' },
+                { label: 'Test', value: 'Test' },
+                { label: 'Others', value: 'Others' }
+              ])
+          );
+          await interaction.reply({ content: '📂 タスクの種類を選んでください', components: [row], ephemeral: true });
+        }
       }
     }
-  }
 
-  if (interaction.isStringSelectMenu() && interaction.customId === 'select_task_type') {
-    const selectedType = interaction.values[0];
-    const modal = new ModalBuilder().setCustomId(`modal_task_input|${selectedType}`).setTitle('新しいタスクを追加');
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder().setCustomId('title').setLabel('🏷 タスク名').setStyle(TextInputStyle.Short).setRequired(true)
-      ),
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder().setCustomId('deadline').setLabel('🗓 締切日（YYYY-MM-DD）').setStyle(TextInputStyle.Short).setRequired(true)
-      ),
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder().setCustomId('description').setLabel('✏️ 説明').setStyle(TextInputStyle.Paragraph).setRequired(false)
-      )
-    );
-    await interaction.showModal(modal);
-  }
-
-  if (interaction.isModalSubmit() && interaction.customId.startsWith('modal_task_input|')) {
-    const type = interaction.customId.split('|')[1];
-    const title = interaction.fields.getTextInputValue('title');
-    const deadline = interaction.fields.getTextInputValue('deadline');
-    const description = interaction.fields.getTextInputValue('description');
-    await interaction.deferReply({ ephemeral: true });
-
-    const result = await saveTaskToNotion({ title, type, deadline, description });
-    if (result.success) {
-      await interaction.editReply(`✅ タスク「${title}」を追加しました！`);
-    } else {
-      await interaction.editReply(`❌ タスクの追加に失敗しました。`);
+    if (interaction.isStringSelectMenu() && interaction.customId === 'select_task_type') {
+      const selectedType = interaction.values[0];
+      const modal = new ModalBuilder().setCustomId(`modal_task_input|${selectedType}`).setTitle('新しいタスクを追加');
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder().setCustomId('title').setLabel('🏷 タスク名').setStyle(TextInputStyle.Short).setRequired(true)
+        ),
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder().setCustomId('deadline').setLabel('🗓 締切日（YYYY-MM-DD）').setStyle(TextInputStyle.Short).setRequired(true)
+        ),
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder().setCustomId('description').setLabel('✏️ 説明').setStyle(TextInputStyle.Paragraph).setRequired(false)
+        )
+      );
+      await interaction.showModal(modal);
     }
+
+    if (interaction.isModalSubmit() && interaction.customId.startsWith('modal_task_input|')) {
+      const type = interaction.customId.split('|')[1];
+      const title = interaction.fields.getTextInputValue('title');
+      const deadline = interaction.fields.getTextInputValue('deadline');
+      const description = interaction.fields.getTextInputValue('description');
+      await interaction.deferReply({ ephemeral: true });
+
+      const result = await saveTaskToNotion({ title, type, deadline, description });
+      if (result.success) {
+        await interaction.editReply(`✅ タスク「${title}」を追加しました！`);
+      } else {
+        await interaction.editReply(`❌ タスクの追加に失敗しました。`);
+      }
+    }
+  } catch (err) {
+    console.error('❌ Interactionエラー:', err);
+    try {
+      if (interaction.replied || interaction.deferred) {
+        await interaction.editReply('❌ 予期せぬエラーが発生しました。');
+      } else {
+        await interaction.reply({ content: '❌ 処理中にエラーが発生しました。', ephemeral: true });
+      }
+    } catch {}
   }
 });
 
@@ -171,7 +183,6 @@ async function sendNewsDM(timeLabel) {
   }
 }
 
-// JSTの6時/12時/22時 → UTC換算
 cron.schedule('0 21 * * 0-6', () => sendNewsDM('朝刊'));  // JST 6:00
 cron.schedule('0 3 * * 0-6',  () => sendNewsDM('昼刊'));  // JST 12:00
 cron.schedule('0 13 * * 0-6', () => sendNewsDM('夜刊'));  // JST 22:00
