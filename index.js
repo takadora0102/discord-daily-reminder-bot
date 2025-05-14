@@ -25,10 +25,15 @@ const getWeather = require('./getWeather');
 const getUpcomingTasks = require('./getNotionTasks');
 const timetable = require('./timetable');
 const { getFormattedNews } = require('./news');
-const { saveTaskToNotion } = require('./saveToNotion'); // ✅ 追加済み
+const { saveTaskToNotion } = require('./saveToNotion');
 
 const client = new Client({
-  intents: [GatewayIntentBits.DirectMessages, GatewayIntentBits.MessageContent],
+  intents: [
+    GatewayIntentBits.DirectMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages
+  ],
   partials: [Partials.Channel]
 });
 
@@ -69,8 +74,9 @@ client.once('ready', async () => {
   await user.send({ content: message, components: [commuteRow, taskRow] });
 });
 
-// ✅ インタラクション処理 with try/catch
 client.on(Events.InteractionCreate, async interaction => {
+  console.log(`🔔 Interaction received: ${interaction.customId || interaction.type}`);
+
   try {
     if (interaction.isButton()) {
       if (interaction.customId === 'go' || interaction.customId === 'back') {
