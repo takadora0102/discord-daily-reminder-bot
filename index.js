@@ -28,13 +28,14 @@ const TARGET_USER_ID = process.env.TARGET_USER_ID;
 const schedule = require('./schedule');
 const getWeather = require('./getWeather');
 const getUpcomingTasks = require('./getNotionTasks');
-const { saveToNotion } = require('./saveToNotion');
+const { saveTaskToNotion } = require('./saveToNotion');
+const { getFormattedNews } = require('./news');
 const timetable = require('./timetable');
-
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.DirectMessages, GatewayIntentBits.MessageContent],
   partials: [Partials.Channel],
 });
+
 const buildMessage = async (prefix = 'おはようございます') => {
   const today = dayjs().add(9, 'hour');
   const dayLabel = today.format('dd');
@@ -53,7 +54,6 @@ const parseTime = (timeStr) => {
   return h * 60 + m;
 };
 const formatTime = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
-
 client.once('ready', async () => {
   console.log(`Bot started as ${client.user.tag}`);
 
@@ -62,22 +62,42 @@ client.once('ready', async () => {
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('go').setLabel('GO').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('back').setLabel('BACK').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId('back').setLabel('BACK').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('add_daily_task').setLabel('📌 今日の課題を追加').setStyle(ButtonStyle.Success)
   );
 
   await user.send({ content: message, components: [row] });
 });
+
+// 毎朝6時にDM通知
 cron.schedule('0 6 * * 0-6', async () => {
   const user = await client.users.fetch(TARGET_USER_ID);
   const message = await buildMessage();
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('go').setLabel('GO').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('back').setLabel('BACK').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId('back').setLabel('BACK').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('add_daily_task').setLabel('📌 今日の課題を追加').setStyle(ButtonStyle.Success)
   );
 
   await user.send({ content: message, components: [row] });
 });
+// 📰 ニュース通知（7時・12時・20時）
+const sendNews = async (label) => {
+  const user = await client.users.fetch(TARGET_USER_ID);
+  const now = dayjs().add(9, 'hour').format('MM/DD HH:mm');
+
+  try {
+    const news = await getFormattedNews();
+    await user.send(`📰【${label}ニュース】（${now}）\n\n${news}`);
+  } catch (error) {
+    console.error('❌ ニュース取得失敗:', error);
+    await user.send(`📰【${label}ニュース】（${now}）\n⚠️ ニュースの取得に失敗しました。`);
+  }
+};
+cron.schedule('0 7 * * *', () => sendNews('朝'));
+cron.schedule('0 12 * * *', () => sendNews('昼'));
+cron.schedule('0 20 * * *', () => sendNews('夜'));
 
 client.on(Events.InteractionCreate, async interaction => {
   try {
@@ -90,7 +110,6 @@ client.on(Events.InteractionCreate, async interaction => {
         const sList = timetable.weekday.go.shinkansen.map(parseTime).filter(m => m >= nowMinutes);
         const tList = timetable.weekday.go.train.map(parseTime).filter(m => m >= nowMinutes);
         const routes = [];
-
         for (let sTime of sList) {
           const sArrival = sTime + 8;
           const candidate = tList.find(t => t >= sArrival + 1);
@@ -106,7 +125,6 @@ client.on(Events.InteractionCreate, async interaction => {
         const tList = timetable.weekday.back.train.map(parseTime).filter(t => t >= nowMinutes);
         const sList = timetable.weekday.back.shinkansen.map(parseTime).filter(s => s >= nowMinutes);
         const routes = [];
-
         for (let tTime of tList) {
           const tArrival = tTime + 20;
           const candidate = sList.find(s => s >= tArrival + 1);
@@ -119,21 +137,19 @@ client.on(Events.InteractionCreate, async interaction => {
         await interaction.editReply({ content: reply });
       }
 
-      if (interaction.customId === 'add_task') {
-        const select = new SelectMenuBuilder()
-          .setCustomId('task_type_select')
-          .setPlaceholder('タスクの種類を選択してください')
-          .addOptions([
-            { label: 'To Do', value: 'To Do' },
-            { label: 'Assignment', value: 'Assignment' },
-            { label: 'Test', value: 'Test' },
-            { label: 'Others', value: 'Others' }
-          ]);
-
-        await interaction.editReply({
-          content: 'タスクの種類を選んでください：',
-          components: [new ActionRowBuilder().addComponents(select)],
+      if (interaction.customId === 'add_daily_task') {
+        const today = dayjs().add(9, 'hour').format('YYYY-MM-DD');
+        const result = await saveTaskToNotion({
+          title: '日課：通学記録',
+          type: 'To Do',
+          deadline: today,
+          description: '今日の通学記録を提出してください。',
         });
+
+        const message = result.success
+          ? `✅ 「日課：通学記録」タスクをNotionに追加しました！`
+          : '❌ タスク追加に失敗しました。';
+        await interaction.editReply({ content: message });
       }
     }
     if (interaction.isStringSelectMenu() && interaction.customId === 'task_type_select') {
@@ -179,7 +195,7 @@ client.on(Events.InteractionCreate, async interaction => {
       const deadline = interaction.fields.getTextInputValue('task_deadline');
       const description = interaction.fields.getTextInputValue('task_description');
       try {
-        await saveToNotion({ title, deadline, description, type });
+        await saveTaskToNotion({ title, deadline, description, type });
         await interaction.editReply({ content: '✅ タスクが正常に追加されました！' });
       } catch (error) {
         console.error('❌ Notion保存エラー:', error);
