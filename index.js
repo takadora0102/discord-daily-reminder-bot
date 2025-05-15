@@ -1,18 +1,18 @@
 const {
   Client,
   GatewayIntentBits,
-  Partials,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  SelectMenuBuilder,
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
-  SelectMenuBuilder,
   SlashCommandBuilder,
   Routes,
   REST,
   Events,
+  Partials,
 } = require('discord.js');
 const cron = require('node-cron');
 const dayjs = require('dayjs');
@@ -20,6 +20,7 @@ require('dayjs/locale/ja');
 dayjs.locale('ja');
 
 require('dotenv').config();
+const { v4: uuidv4 } = require('uuid');
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
@@ -31,6 +32,8 @@ const getUpcomingTasks = require('./getNotionTasks');
 const { saveTaskToNotion } = require('./saveTaskToNotion');
 const { getFormattedNews } = require('./news');
 const timetable = require('./timetable');
+
+const pendingTasks = new Map(); // UUID → 一時保存データ
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.DirectMessages],
   partials: [Partials.Channel],
@@ -61,126 +64,58 @@ client.once('ready', async () => {
   const message = await buildMessage('✅ テスト送信');
 
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('go').setLabel('GO').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('back').setLabel('BACK').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('add_task').setLabel('📌 タスクを追加').setStyle(ButtonStyle.Success)
+    new ButtonBuilder().setCustomId('add_task').setLabel('📝 タスクを追加').setStyle(ButtonStyle.Primary)
   );
 
   await user.send({ content: message, components: [row] });
 });
 
-// 毎朝6時：天気・時間割・タスク通知
-cron.schedule('0 6 * * *', async () => {
-  const user = await client.users.fetch(TARGET_USER_ID);
-  const message = await buildMessage();
-
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('go').setLabel('GO').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('back').setLabel('BACK').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('add_task').setLabel('📌 タスクを追加').setStyle(ButtonStyle.Success)
-  );
-
-  await user.send({ content: message, components: [row] });
-});
-
-// ニュース通知（朝・昼・夜）
-const sendNews = async (label) => {
-  const user = await client.users.fetch(TARGET_USER_ID);
-  const now = dayjs().add(9, 'hour').format('MM/DD HH:mm');
-
-  try {
-    const news = await getFormattedNews();
-    await user.send(`📰【${label}ニュース】（${now}）\n\n${news}`);
-  } catch (error) {
-    console.error('❌ ニュース取得失敗:', error);
-    await user.send(`📰【${label}ニュース】（${now}）\n⚠️ ニュースの取得に失敗しました。`);
-  }
-};
-cron.schedule('0 7 * * *', () => sendNews('朝'));
-cron.schedule('0 12 * * *', () => sendNews('昼'));
-cron.schedule('0 20 * * *', () => sendNews('夜'));
 client.on(Events.InteractionCreate, async interaction => {
   try {
-    // ================= ボタン処理 =================
-    if (interaction.isButton()) {
-      if (interaction.customId === 'add_task') {
-        const modal = new ModalBuilder()
-          .setCustomId('task_modal')
-          .setTitle('タスクを追加');
+    if (interaction.isButton() && interaction.customId === 'add_task') {
+      const modal = new ModalBuilder().setCustomId('task_modal').setTitle('タスクを追加');
 
-        modal.addComponents(
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId('task_name')
-              .setLabel('タスク名')
-              .setStyle(TextInputStyle.Short)
-              .setRequired(true)
-          ),
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId('task_deadline')
-              .setLabel('期限 (YYYY-MM-DD)')
-              .setStyle(TextInputStyle.Short)
-              .setRequired(true)
-          ),
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId('task_description')
-              .setLabel('内容')
-              .setStyle(TextInputStyle.Paragraph)
-              .setRequired(false)
-          )
-        );
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId('task_name')
+            .setLabel('タスク名')
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+        ),
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId('task_deadline')
+            .setLabel('期限 (YYYY-MM-DD または YYYYMMDD)')
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+        ),
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId('task_description')
+            .setLabel('内容')
+            .setStyle(TextInputStyle.Paragraph)
+            .setRequired(false)
+        )
+      );
 
-        await interaction.showModal(modal);
-        return;
-      }
-
-      // GO/BACKボタン：通学案内処理
-      await interaction.deferReply({ ephemeral: true });
-      const now = dayjs().add(9, 'hour');
-      const nowMinutes = now.hour() * 60 + now.minute();
-      if (interaction.customId === 'go') {
-        const sList = timetable.weekday.go.shinkansen.map(parseTime).filter(m => m >= nowMinutes);
-        const tList = timetable.weekday.go.train.map(parseTime).filter(m => m >= nowMinutes);
-        const routes = [];
-        for (let sTime of sList) {
-          const sArrival = sTime + 8;
-          const candidate = tList.find(t => t >= sArrival + 1);
-          if (candidate) {
-            routes.push(`博多南発 ${formatTime(sTime)} 博多発 ${formatTime(candidate)}`);
-            if (routes.length >= 2) break;
-          }
-        }
-        const reply = routes.length ? `【通学案内】\n① ${routes[0]}${routes[1] ? `\n② ${routes[1]}` : ''}` : '適切な通学案が見つかりませんでした。';
-        await interaction.editReply({ content: reply });
-      }
-
-      if (interaction.customId === 'back') {
-        const tList = timetable.weekday.back.train.map(parseTime).filter(t => t >= nowMinutes);
-        const sList = timetable.weekday.back.shinkansen.map(parseTime).filter(s => s >= nowMinutes);
-        const routes = [];
-        for (let tTime of tList) {
-          const tArrival = tTime + 20;
-          const candidate = sList.find(s => s >= tArrival + 1);
-          if (candidate) {
-            routes.push(`福工大前発 ${formatTime(tTime)} 博多発 ${formatTime(candidate)}`);
-            if (routes.length >= 2) break;
-          }
-        }
-        const reply = routes.length ? `【帰宅案内】\n① ${routes[0]}${routes[1] ? `\n② ${routes[1]}` : ''}` : '適切な帰宅案が見つかりませんでした。';
-        await interaction.editReply({ content: reply });
-      }
+      await interaction.showModal(modal);
     }
-
-    // ========== モーダル送信後：Type選択用セレクトメニュー表示 ==========
     if (interaction.isModalSubmit() && interaction.customId === 'task_modal') {
       const title = interaction.fields.getTextInputValue('task_name');
-      const deadline = interaction.fields.getTextInputValue('task_deadline');
+      let deadline = interaction.fields.getTextInputValue('task_deadline');
       const description = interaction.fields.getTextInputValue('task_description');
 
+      // YYYYMMDD → YYYY-MM-DD に自動変換
+      if (/^\d{8}$/.test(deadline)) {
+        deadline = `${deadline.slice(0, 4)}-${deadline.slice(4, 6)}-${deadline.slice(6, 8)}`;
+      }
+
+      const uuid = uuidv4();
+      pendingTasks.set(uuid, { title, deadline, description });
+
       const select = new SelectMenuBuilder()
-        .setCustomId(`task_type_select|${encodeURIComponent(title)}|${deadline}|${encodeURIComponent(description)}`)
+        .setCustomId(`task_type_select|${uuid}`)
         .setPlaceholder('タスクの種類を選んでください')
         .addOptions([
           { label: 'To Do', value: 'To Do' },
@@ -190,17 +125,21 @@ client.on(Events.InteractionCreate, async interaction => {
         ]);
 
       const row = new ActionRowBuilder().addComponents(select);
-      await interaction.reply({ content: '📌 タスクの種類を選んでください：', components: [row], ephemeral: true });
+      await interaction.reply({ content: '種類を選択してください：', components: [row], ephemeral: true });
     }
-    // ========== Type選択後：Notionに保存 ==========
+
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('task_type_select')) {
-      const [_, rawTitle, deadline, rawDesc] = interaction.customId.split('|');
-      const title = decodeURIComponent(rawTitle);
-      const description = decodeURIComponent(rawDesc);
+      const [_, uuid] = interaction.customId.split('|');
+      const task = pendingTasks.get(uuid);
+
+      if (!task) {
+        await interaction.reply({ content: '⚠️ タスク情報が見つかりませんでした。', ephemeral: true });
+        return;
+      }
+
       const type = interaction.values[0];
-
-      const result = await saveTaskToNotion({ title, deadline, type, description });
-
+      const result = await saveTaskToNotion({ title: task.title, deadline: task.deadline, type, description: task.description });
+      pendingTasks.delete(uuid);
       await interaction.update({
         content: result.success
           ? '✅ タスクをNotionに追加しました！'
@@ -209,15 +148,15 @@ client.on(Events.InteractionCreate, async interaction => {
       });
     }
   } catch (e) {
-    console.error('❗ Interaction処理中エラー:', e);
+    console.error('❌ Interaction処理中エラー:', e);
   }
 });
 
-// ================= スラッシュコマンド登録 =================
+// スラッシュコマンド（任意で `/task` を表示する場合）
 const commands = [
   new SlashCommandBuilder()
     .setName('task')
-    .setDescription('📌 タスク追加ボタンを表示する'),
+    .setDescription('📝 タスク追加ボタンを表示します'),
 ].map(c => c.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
@@ -229,11 +168,11 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
     console.error('❌ スラッシュコマンド登録失敗:', err);
   }
 })();
-
-// ================= 起動確認用Webサーバー =================
+// Webサーバー（Render対応）
 const express = require('express');
 const app = express();
 app.get('/', (req, res) => res.send('Bot is running.'));
 app.listen(process.env.PORT || 3000);
 
+// Botログイン
 client.login(TOKEN);
