@@ -46,12 +46,10 @@ const buildMessage = async (prefix = 'おはようございます') => {
   const scheduleText = todaySchedule.join('\n');
   const weather = await getWeather();
   const taskText = await getUpcomingTasks();
-  const newsText = await getFormattedNews('朝');
 
   return `${prefix}！今日は ${today.format('MM月DD日（dd）')} です！\n\n` +
     `${weather ? `🌤️ 天気：${weather.description}\n🌡️ 気温：最高 ${weather.tempMax}℃ / 最低 ${weather.tempMin}℃` : '🌥️ 天気情報を取得できませんでした。'}\n\n` +
-    `📚 今日の時間割:\n${scheduleText}\n\n` +
-    `${taskText}\n\n📰 朝のニュース:\n${newsText}`;
+    `📚 今日の時間割:\n${scheduleText}\n\n${taskText}`;
 };
 
 const parseTime = (timeStr) => {
@@ -76,7 +74,7 @@ client.once('ready', async () => {
   await user.send({ content: message, components: [row] });
 });
 
-// JST 6:00（UTC 21:00） 朝の通知
+// JST 6:00（UTC 21:00） 朝の通知（天気・時間割・タスク）
 cron.schedule('0 21 * * 0-6', async () => {
   const user = await client.users.fetch(TARGET_USER_ID);
   const message = await buildMessage();
@@ -89,20 +87,26 @@ cron.schedule('0 21 * * 0-6', async () => {
 
   await user.send({ content: message, components: [row] });
 });
-// JST 12:00（UTC 3:00） 昼のニュース通知
+// JST 6:00（UTC 21:00） 朝のニュース（別送信）
+cron.schedule('1 21 * * 0-6', async () => {
+  const user = await client.users.fetch(TARGET_USER_ID);
+  const newsText = await getFormattedNews('朝');
+  await user.send(`📰 朝のニュースをお届けします：\n\n${newsText}`);
+});
+
+// JST 12:00（UTC 3:00） 昼のニュース
 cron.schedule('0 3 * * 0-6', async () => {
   const user = await client.users.fetch(TARGET_USER_ID);
   const newsText = await getFormattedNews('昼');
   await user.send(`📰 昼のニュースをお届けします：\n\n${newsText}`);
 });
 
-// JST 20:00（UTC 11:00） 夜のニュース通知
+// JST 20:00（UTC 11:00） 夜のニュース
 cron.schedule('0 11 * * 0-6', async () => {
   const user = await client.users.fetch(TARGET_USER_ID);
   const newsText = await getFormattedNews('夜');
   await user.send(`📰 夜のニュースをお届けします：\n\n${newsText}`);
 });
-
 client.on(Events.InteractionCreate, async interaction => {
   try {
     if (interaction.isButton()) {
@@ -118,6 +122,7 @@ client.on(Events.InteractionCreate, async interaction => {
         const aList = timeA.train.map(parseTime).filter(m => m >= nowMinutes);
         const bList = timeB.shinkansen.map(parseTime).filter(m => m >= nowMinutes);
         const routes = [];
+
         for (let aTime of aList) {
           const arrival = aTime + (isGo ? 8 : 20);
           const candidate = bList.find(b => b >= arrival + 1);
@@ -132,7 +137,6 @@ client.on(Events.InteractionCreate, async interaction => {
           : '適切なルートが見つかりませんでした。';
         await interaction.editReply({ content: reply });
       }
-
       if (interaction.customId === 'add_task') {
         const modal = new ModalBuilder().setCustomId('task_modal').setTitle('タスクを追加');
         modal.addComponents(
@@ -170,7 +174,6 @@ client.on(Events.InteractionCreate, async interaction => {
       if (/^\d{8}$/.test(deadline)) {
         deadline = `${deadline.slice(0, 4)}-${deadline.slice(4, 6)}-${deadline.slice(6, 8)}`;
       }
-
       if (!/^\d{4}-\d{2}-\d{2}$/.test(deadline)) {
         await interaction.reply({ content: '⚠️ 期限の形式が不正です。YYYYMMDD または YYYY-MM-DD で入力してください。', ephemeral: true });
         return;
@@ -192,6 +195,7 @@ client.on(Events.InteractionCreate, async interaction => {
       const row = new ActionRowBuilder().addComponents(select);
       await interaction.reply({ content: '🔽 タスクの種類を選んでください：', components: [row], ephemeral: true });
     }
+
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('task_type_select')) {
       const [, uuid] = interaction.customId.split('|');
       const task = pendingTasks.get(uuid);

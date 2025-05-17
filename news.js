@@ -4,19 +4,19 @@ const fetch = require('node-fetch');
 
 const feedsByTime = {
   朝: [
-    'http://feeds.bbci.co.uk/news/world/rss.xml',           // BBC World（英語）
-    'https://jp.reuters.com/rssFeed/topNews',               // ロイター日本語
-    'https://techcrunch.com/feed/'                          // TechCrunch（英語）
+    'http://feeds.bbci.co.uk/news/world/rss.xml',
+    'https://jp.reuters.com/rssFeed/topNews',
+    'https://techcrunch.com/feed/'
   ],
   昼: [
-    'https://b.hatena.ne.jp/hotentry/it.rss',               // はてなIT
-    'https://japan.cnet.com/rss/index.rdf',                 // CNET Japan
-    'https://gigazine.net/news/rss_2.0/'                    // GIGAZINE
+    'https://b.hatena.ne.jp/hotentry/it.rss',
+    'https://japan.cnet.com/rss/index.rdf',
+    'https://gigazine.net/news/rss_2.0/'
   ],
   夜: [
-    'https://sorae.info/feed',                              // 宇宙科学
-    'https://resemom.jp/rss/rss.xml',                       // 教育リセマム
-    'https://benesse.jp/contents/feed.xml'                 // ベネッセ教育
+    'https://sorae.info/feed',
+    'https://resemom.jp/rss/rss.xml',
+    'https://benesse.jp/contents/feed.xml'
   ]
 };
 
@@ -28,16 +28,17 @@ async function translate(text, from = 'en', to = 'ja') {
       body: JSON.stringify({ q: text, source: from, target: to, format: 'text' })
     });
     const data = await res.json();
-    return data.translatedText;
+    return data.translatedText || text;
   } catch (e) {
     console.error('❌ 翻訳失敗:', e);
-    return text; // 翻訳できなかったら原文
+    return text;
   }
 }
 
 function isEnglish(text) {
-  const jaRatio = (text.match(/[\u3000-\u30FF\u4E00-\u9FFF]/g) || []).length / text.length;
-  return jaRatio < 0.2;
+  const jaMatch = text.match(/[\u3000-\u30FF\u4E00-\u9FFF]/g);
+  const jaRatio = (jaMatch ? jaMatch.length : 0) / text.length;
+  return jaRatio < 0.3;
 }
 
 async function getFormattedNews(label = '朝') {
@@ -52,9 +53,8 @@ async function getFormattedNews(label = '朝') {
         let summary = item.contentSnippet?.slice(0, 100) || '';
         let link = item.link;
 
-        if (isEnglish(summary)) {
-          summary = await translate(summary);
-        }
+        if (isEnglish(title)) title = await translate(title);
+        if (isEnglish(summary)) summary = await translate(summary);
 
         all.push(`**${title}**\n${summary}...\n🔗 <${link}>`);
       }
