@@ -21,7 +21,6 @@ dayjs.locale('ja');
 require('dotenv').config();
 
 const { v4: uuidv4 } = require('uuid');
-
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
@@ -31,15 +30,19 @@ const schedule = require('./schedule');
 const getWeather = require('./getWeather');
 const getUpcomingTasks = require('./getNotionTasks');
 const { saveTaskToNotion } = require('./saveTaskToNotion');
+const { saveStudyToNotion } = require('./saveStudyToNotion');
+const { saveSleepToNotion } = require('./saveSleepToNotion');
 const { getFormattedNews } = require('./news');
 const timetable = require('./timetable');
 
-const pendingTasks = new Map();
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.DirectMessages],
   partials: [Partials.Channel],
 });
-const buildMessage = async (prefix = 'おはようございます') => {
+
+const studySessions = new Map();  // userId → startTime
+const sleepSessions = new Map();  // userId → sleepStartTime
+const buildMorningMessage = async (userId, sleepMinutes, diff, avg) => {
   const today = dayjs().add(9, 'hour');
   const dayLabel = today.format('dd');
   const todaySchedule = schedule[dayLabel] || ['（時間割未登録）'];
@@ -47,125 +50,158 @@ const buildMessage = async (prefix = 'おはようございます') => {
   const weather = await getWeather();
   const taskText = await getUpcomingTasks();
 
-  return `${prefix}！今日は ${today.format('MM月DD日（dd）')} です！\n\n` +
+  const sleepMsg = `🛌 睡眠時間：${Math.floor(sleepMinutes / 60)}時間${sleepMinutes % 60}分（${diff >= 0 ? '+' : ''}${diff}分）｜週平均：${Math.floor(avg / 60)}時間${avg % 60}分`;
+
+  return `おはようございます！今日は ${today.format('MM月DD日（dd）')} です！\n\n${sleepMsg}\n\n` +
     `${weather ? `🌤️ 天気：${weather.description}\n🌡️ 気温：最高 ${weather.tempMax}℃ / 最低 ${weather.tempMin}℃` : '🌥️ 天気情報を取得できませんでした。'}\n\n` +
     `📚 今日の時間割:\n${scheduleText}\n\n${taskText}`;
 };
 
-const parseTime = (timeStr) => {
-  const [h, m] = timeStr.split(':').map(Number);
-  return h * 60 + m;
-};
+const buildRowMorning = () =>
+  new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('go').setLabel('GO').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('back').setLabel('BACK').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('study_start').setLabel('勉強開始').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId('add_task').setLabel('📝 タスクを追加').setStyle(ButtonStyle.Secondary)
+  );
 
-const formatTime = (m) =>
-  `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+const buildRowNight = () =>
+  new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('sleep_start').setLabel('消灯').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('sleep_end').setLabel('起床').setStyle(ButtonStyle.Secondary)
+  );
 client.once('ready', async () => {
   console.log(`✅ Bot started as ${client.user.tag}`);
-
-  const user = await client.users.fetch(TARGET_USER_ID);
-  const message = await buildMessage('✅ テスト送信');
-
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('go').setLabel('GO').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('back').setLabel('BACK').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('add_task').setLabel('📝 タスクを追加').setStyle(ButtonStyle.Success)
-  );
-
-  await user.send({ content: message, components: [row] });
 });
 
-// JST 6:00（UTC 21:00） 朝の通知（天気・時間割・タスク）
-cron.schedule('0 21 * * 0-6', async () => {
+// 毎晩22時に勉強時間の合計を送信（睡眠ボタン付き）
+cron.schedule('0 13 * * 0-6', async () => {
   const user = await client.users.fetch(TARGET_USER_ID);
-  const message = await buildMessage();
 
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('go').setLabel('GO').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('back').setLabel('BACK').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('add_task').setLabel('📝 タスクを追加').setStyle(ButtonStyle.Success)
-  );
+  let totalMinutes = 0;
+  for (const [key, value] of studySessions.entries()) {
+    if (value.date === dayjs().format('YYYY-MM-DD')) {
+      totalMinutes += value.duration;
+    }
+  }
 
-  await user.send({ content: message, components: [row] });
-});
-// JST 6:00（UTC 21:00） 朝のニュース（別送信）
-cron.schedule('1 21 * * 0-6', async () => {
-  const user = await client.users.fetch(TARGET_USER_ID);
-  const newsText = await getFormattedNews('朝');
-  await user.send(`📰 朝のニュースをお届けします：\n\n${newsText}`);
-});
+  const message = `📘 今日の勉強記録\n・合計勉強時間：${Math.floor(totalMinutes / 60)}時間${totalMinutes % 60}分\n\n今日もお疲れさまでした！`;
 
-// JST 12:00（UTC 3:00） 昼のニュース
-cron.schedule('0 3 * * 0-6', async () => {
-  const user = await client.users.fetch(TARGET_USER_ID);
-  const newsText = await getFormattedNews('昼');
-  await user.send(`📰 昼のニュースをお届けします：\n\n${newsText}`);
-});
-
-// JST 20:00（UTC 11:00） 夜のニュース
-cron.schedule('0 11 * * 0-6', async () => {
-  const user = await client.users.fetch(TARGET_USER_ID);
-  const newsText = await getFormattedNews('夜');
-  await user.send(`📰 夜のニュースをお届けします：\n\n${newsText}`);
+  await user.send({ content: message, components: [buildRowNight()] });
 });
 client.on(Events.InteractionCreate, async interaction => {
   try {
-    if (interaction.isButton()) {
-      if (interaction.customId === 'go' || interaction.customId === 'back') {
-        await interaction.deferReply({ ephemeral: true });
-        const now = dayjs().add(9, 'hour');
-        const nowMinutes = now.hour() * 60 + now.minute();
+    const userId = interaction.user.id;
 
-        const isGo = interaction.customId === 'go';
-        const timeA = isGo ? timetable.weekday.go : timetable.weekday.back;
-        const timeB = isGo ? timetable.weekday.back : timetable.weekday.go;
-
-        const aList = timeA.train.map(parseTime).filter(m => m >= nowMinutes);
-        const bList = timeB.shinkansen.map(parseTime).filter(m => m >= nowMinutes);
-        const routes = [];
-
-        for (let aTime of aList) {
-          const arrival = aTime + (isGo ? 8 : 20);
-          const candidate = bList.find(b => b >= arrival + 1);
-          if (candidate) {
-            routes.push(`${isGo ? '博多南' : '福工大前'}発 ${formatTime(aTime)} 博多発 ${formatTime(candidate)}`);
-            if (routes.length >= 2) break;
-          }
-        }
-
-        const reply = routes.length
-          ? `【${isGo ? '通学' : '帰宅'}案内】\n① ${routes[0]}${routes[1] ? `\n② ${routes[1]}` : ''}`
-          : '適切なルートが見つかりませんでした。';
-        await interaction.editReply({ content: reply });
+    // ===== 起床ボタン =====
+    if (interaction.isButton() && interaction.customId === 'sleep_end') {
+      if (!sleepSessions.has(userId)) {
+        await interaction.reply({ content: '⚠️ 消灯記録がありません。', ephemeral: true });
+        return;
       }
-      if (interaction.customId === 'add_task') {
-        const modal = new ModalBuilder().setCustomId('task_modal').setTitle('タスクを追加');
-        modal.addComponents(
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId('task_name')
-              .setLabel('タスク名')
-              .setStyle(TextInputStyle.Short)
-              .setRequired(true)
-          ),
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId('task_deadline')
-              .setLabel('期限 (YYYY-MM-DD または YYYYMMDD)')
-              .setStyle(TextInputStyle.Short)
-              .setRequired(true)
-          ),
-          new ActionRowBuilder().addComponents(
-            new TextInputBuilder()
-              .setCustomId('task_description')
-              .setLabel('内容')
-              .setStyle(TextInputStyle.Paragraph)
-              .setRequired(false)
-          )
-        );
-        await interaction.showModal(modal);
-      }
+
+      const start = sleepSessions.get(userId);
+      const end = new Date();
+      const duration = Math.round((end - start) / 60000);
+      sleepSessions.delete(userId);
+
+      const { success, diff, average } = await saveSleepToNotion({ duration, user: userId });
+      const message = await buildMorningMessage(userId, duration, diff, average);
+
+      await interaction.reply({ content: message, components: [buildRowMorning()] });
+      return;
     }
 
+    // ===== 消灯ボタン =====
+    if (interaction.isButton() && interaction.customId === 'sleep_start') {
+      sleepSessions.set(userId, new Date());
+      await interaction.reply({ content: '🛌 消灯時間を記録しました。おやすみなさい！', ephemeral: true });
+      return;
+    }
+
+    // ===== 通学 / 帰宅ボタン =====
+    if (interaction.isButton() && (interaction.customId === 'go' || interaction.customId === 'back')) {
+      await handleRouteButton(interaction);
+      return;
+    }
+    // ===== 勉強開始 =====
+    if (interaction.isButton() && interaction.customId === 'study_start') {
+      studySessions.set(userId, { start: new Date() });
+      await interaction.reply({ content: '📗 勉強開始時間を記録しました。頑張って！', ephemeral: true });
+      return;
+    }
+
+    // ===== 勉強終了（セレクトでカテゴリ選択）=====
+    if (interaction.isButton() && interaction.customId === 'study_end') {
+      const session = studySessions.get(userId);
+      if (!session || !session.start) {
+        await interaction.reply({ content: '⚠️ 勉強開始記録がありません。', ephemeral: true });
+        return;
+      }
+
+      const now = new Date();
+      const duration = Math.round((now - session.start) / 60000);
+      studySessions.set(userId, { ...session, duration, date: dayjs().format('YYYY-MM-DD') });
+
+      const select = new StringSelectMenuBuilder()
+        .setCustomId(`study_category|${userId}`)
+        .setPlaceholder('カテゴリを選択してください')
+        .addOptions([
+          { label: '理論', value: '理論' },
+          { label: '機械', value: '機械' },
+          { label: '電力', value: '電力' },
+          { label: '法規', value: '法規' },
+          { label: 'その他', value: 'その他' }
+        ]);
+
+      const row = new ActionRowBuilder().addComponents(select);
+      await interaction.reply({ content: '📘 勉強のカテゴリを選択してください：', components: [row], ephemeral: true });
+      return;
+    }
+    // ===== 勉強カテゴリ選択 =====
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('study_category')) {
+      const [_, uid] = interaction.customId.split('|');
+      const session = studySessions.get(uid);
+      const category = interaction.values[0] || 'その他';
+      if (!session || !session.duration) {
+        await interaction.reply({ content: '⚠️ 勉強時間が不明です。', ephemeral: true });
+        return;
+      }
+
+      await saveStudyToNotion({ duration: session.duration, category, user: uid });
+
+      await interaction.update({ content: `✅ ${session.duration}分の勉強を「${category}」として記録しました！`, components: [] });
+      return;
+    }
+
+    // ===== タスク追加モーダル =====
+    if (interaction.isButton() && interaction.customId === 'add_task') {
+      const modal = new ModalBuilder().setCustomId('task_modal').setTitle('タスクを追加');
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId('task_name')
+            .setLabel('タスク名')
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+        ),
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId('task_deadline')
+            .setLabel('期限 (YYYY-MM-DD または YYYYMMDD)')
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+        ),
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId('task_description')
+            .setLabel('内容')
+            .setStyle(TextInputStyle.Paragraph)
+            .setRequired(false)
+        )
+      );
+      await interaction.showModal(modal);
+    }
     if (interaction.isModalSubmit() && interaction.customId === 'task_modal') {
       let title = interaction.fields.getTextInputValue('task_name');
       let deadline = interaction.fields.getTextInputValue('task_deadline');
@@ -174,14 +210,13 @@ client.on(Events.InteractionCreate, async interaction => {
       if (/^\d{8}$/.test(deadline)) {
         deadline = `${deadline.slice(0, 4)}-${deadline.slice(4, 6)}-${deadline.slice(6, 8)}`;
       }
+
       if (!/^\d{4}-\d{2}-\d{2}$/.test(deadline)) {
         await interaction.reply({ content: '⚠️ 期限の形式が不正です。YYYYMMDD または YYYY-MM-DD で入力してください。', ephemeral: true });
         return;
       }
 
       const uuid = uuidv4();
-      pendingTasks.set(uuid, { title, deadline, description });
-
       const select = new StringSelectMenuBuilder()
         .setCustomId(`task_type_select|${uuid}`)
         .setPlaceholder('タスクの種類を選んでください')
@@ -193,9 +228,10 @@ client.on(Events.InteractionCreate, async interaction => {
         ]);
 
       const row = new ActionRowBuilder().addComponents(select);
+      pendingTasks.set(uuid, { title, deadline, description });
+
       await interaction.reply({ content: '🔽 タスクの種類を選んでください：', components: [row], ephemeral: true });
     }
-
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('task_type_select')) {
       const [, uuid] = interaction.customId.split('|');
       const task = pendingTasks.get(uuid);
