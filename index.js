@@ -39,7 +39,6 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.DirectMessages],
   partials: [Partials.Channel],
 });
-
 const buildMessage = async (prefix = 'おはようございます') => {
   const today = dayjs().add(9, 'hour');
   const dayLabel = today.format('dd');
@@ -47,10 +46,12 @@ const buildMessage = async (prefix = 'おはようございます') => {
   const scheduleText = todaySchedule.join('\n');
   const weather = await getWeather();
   const taskText = await getUpcomingTasks();
+  const newsText = await getFormattedNews('朝');
 
   return `${prefix}！今日は ${today.format('MM月DD日（dd）')} です！\n\n` +
     `${weather ? `🌤️ 天気：${weather.description}\n🌡️ 気温：最高 ${weather.tempMax}℃ / 最低 ${weather.tempMin}℃` : '🌥️ 天気情報を取得できませんでした。'}\n\n` +
-    `📚 今日の時間割:\n${scheduleText}\n\n${taskText}`;
+    `📚 今日の時間割:\n${scheduleText}\n\n` +
+    `${taskText}\n\n📰 朝のニュース:\n${newsText}`;
 };
 
 const parseTime = (timeStr) => {
@@ -75,8 +76,8 @@ client.once('ready', async () => {
   await user.send({ content: message, components: [row] });
 });
 
-// 毎朝6時に通知＋ボタン送信
-cron.schedule('0 6 * * 0-6', async () => {
+// JST 6:00（UTC 21:00） 朝の通知
+cron.schedule('0 21 * * 0-6', async () => {
   const user = await client.users.fetch(TARGET_USER_ID);
   const message = await buildMessage();
 
@@ -88,6 +89,20 @@ cron.schedule('0 6 * * 0-6', async () => {
 
   await user.send({ content: message, components: [row] });
 });
+// JST 12:00（UTC 3:00） 昼のニュース通知
+cron.schedule('0 3 * * 0-6', async () => {
+  const user = await client.users.fetch(TARGET_USER_ID);
+  const newsText = await getFormattedNews('昼');
+  await user.send(`📰 昼のニュースをお届けします：\n\n${newsText}`);
+});
+
+// JST 20:00（UTC 11:00） 夜のニュース通知
+cron.schedule('0 11 * * 0-6', async () => {
+  const user = await client.users.fetch(TARGET_USER_ID);
+  const newsText = await getFormattedNews('夜');
+  await user.send(`📰 夜のニュースをお届けします：\n\n${newsText}`);
+});
+
 client.on(Events.InteractionCreate, async interaction => {
   try {
     if (interaction.isButton()) {
@@ -103,7 +118,6 @@ client.on(Events.InteractionCreate, async interaction => {
         const aList = timeA.train.map(parseTime).filter(m => m >= nowMinutes);
         const bList = timeB.shinkansen.map(parseTime).filter(m => m >= nowMinutes);
         const routes = [];
-
         for (let aTime of aList) {
           const arrival = aTime + (isGo ? 8 : 20);
           const candidate = bList.find(b => b >= arrival + 1);
@@ -178,7 +192,6 @@ client.on(Events.InteractionCreate, async interaction => {
       const row = new ActionRowBuilder().addComponents(select);
       await interaction.reply({ content: '🔽 タスクの種類を選んでください：', components: [row], ephemeral: true });
     }
-
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('task_type_select')) {
       const [, uuid] = interaction.customId.split('|');
       const task = pendingTasks.get(uuid);
@@ -208,6 +221,7 @@ client.on(Events.InteractionCreate, async interaction => {
     console.error('❌ Interaction処理中エラー:', e);
   }
 });
+
 const commands = [
   new SlashCommandBuilder()
     .setName('task')
@@ -224,11 +238,9 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
   }
 })();
 
-// Webサーバー（Render用）
 const express = require('express');
 const app = express();
 app.get('/', (req, res) => res.send('Bot is running.'));
 app.listen(process.env.PORT || 3000);
 
-// Discordログイン
 client.login(TOKEN);
