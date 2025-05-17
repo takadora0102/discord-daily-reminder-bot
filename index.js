@@ -75,7 +75,7 @@ client.once('ready', async () => {
 });
 
 // 毎晩22時に勉強時間の合計を送信（睡眠ボタン付き）
-cron.schedule('0 13 * * 0-6', async () => {
+cron.schedule('0 16 * * 0-6', async () => {
   const user = await client.users.fetch(TARGET_USER_ID);
 
   let totalMinutes = 0;
