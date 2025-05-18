@@ -4,14 +4,14 @@ require('dotenv').config();
 const notion = new Client({ auth: process.env.NOTION_API_KEY });
 const DATABASE_ID = process.env.NOTION_SLEEP_DATABASE_ID;
 
-// 過去の睡眠記録から前日比・週平均を計算する関数
+// 直近の睡眠データから前日比・平均を計算
 async function calculateSleepStats(user) {
   try {
     const response = await notion.databases.query({
       database_id: DATABASE_ID,
       filter: {
         property: 'User',
-        rich_text: { equals: user }
+        title: { equals: user }
       },
       sorts: [{ property: 'Sleep Date', direction: 'descending' }]
     });
@@ -24,7 +24,6 @@ async function calculateSleepStats(user) {
       const props = page.properties;
       const dateStr = props['Sleep Date'].date?.start;
       const duration = props['Duration'].number;
-
       if (!dateStr || !duration) continue;
 
       const date = new Date(dateStr);
@@ -53,11 +52,11 @@ async function saveSleepToNotion({ duration, user }) {
     await notion.pages.create({
       parent: { database_id: DATABASE_ID },
       properties: {
+        'User': { title: [{ text: { content: user } }] },
         'Sleep Date': { date: { start: now.toISOString() } },
         'Duration': { number: duration },
         'Previous Diff': { number: diff },
-        'Weekly Average': { number: stats.average },
-        'User': { rich_text: [{ text: { content: user } }] }
+        'Weekly Average': { number: stats.average }
       }
     });
 

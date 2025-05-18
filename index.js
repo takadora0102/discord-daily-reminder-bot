@@ -40,8 +40,9 @@ const client = new Client({
   partials: [Partials.Channel],
 });
 
-const studySessions = new Map();  // userId → startTime
-const sleepSessions = new Map();  // userId → sleepStartTime
+const studySessions = new Map();
+const sleepSessions = new Map();
+const pendingTasks = new Map();
 const buildMorningMessage = async (userId, sleepMinutes, diff, avg) => {
   const today = dayjs().add(9, 'hour');
   const dayLabel = today.format('dd');
@@ -74,8 +75,7 @@ client.once('ready', async () => {
   console.log(`✅ Bot started as ${client.user.tag}`);
 });
 
-// 毎晩22時に勉強時間の合計を送信（睡眠ボタン付き）
-cron.schedule('0 16 * * 0-6', async () => {
+cron.schedule('0 13 * * 0-6', async () => {
   const user = await client.users.fetch(TARGET_USER_ID);
 
   let totalMinutes = 0;
@@ -93,7 +93,6 @@ client.on(Events.InteractionCreate, async interaction => {
   try {
     const userId = interaction.user.id;
 
-    // ===== 起床ボタン =====
     if (interaction.isButton() && interaction.customId === 'sleep_end') {
       if (!sleepSessions.has(userId)) {
         await interaction.reply({ content: '⚠️ 消灯記録がありません。', ephemeral: true });
@@ -112,26 +111,31 @@ client.on(Events.InteractionCreate, async interaction => {
       return;
     }
 
-    // ===== 消灯ボタン =====
     if (interaction.isButton() && interaction.customId === 'sleep_start') {
       sleepSessions.set(userId, new Date());
       await interaction.reply({ content: '🛌 消灯時間を記録しました。おやすみなさい！', ephemeral: true });
       return;
     }
 
-    // ===== 通学 / 帰宅ボタン =====
     if (interaction.isButton() && (interaction.customId === 'go' || interaction.customId === 'back')) {
       await handleRouteButton(interaction);
       return;
     }
-    // ===== 勉強開始 =====
     if (interaction.isButton() && interaction.customId === 'study_start') {
       studySessions.set(userId, { start: new Date() });
-      await interaction.reply({ content: '📗 勉強開始時間を記録しました。頑張って！', ephemeral: true });
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('study_end').setLabel('勉強終了').setStyle(ButtonStyle.Danger)
+      );
+
+      await interaction.reply({
+        content: '📗 勉強開始しました。終了したら「勉強終了」ボタンを押してください。',
+        components: [row],
+        flags: 64
+      });
       return;
     }
 
-    // ===== 勉強終了（セレクトでカテゴリ選択）=====
     if (interaction.isButton() && interaction.customId === 'study_end') {
       const session = studySessions.get(userId);
       if (!session || !session.start) {
@@ -158,7 +162,6 @@ client.on(Events.InteractionCreate, async interaction => {
       await interaction.reply({ content: '📘 勉強のカテゴリを選択してください：', components: [row], ephemeral: true });
       return;
     }
-    // ===== 勉強カテゴリ選択 =====
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('study_category')) {
       const [_, uid] = interaction.customId.split('|');
       const session = studySessions.get(uid);
@@ -174,7 +177,6 @@ client.on(Events.InteractionCreate, async interaction => {
       return;
     }
 
-    // ===== タスク追加モーダル =====
     if (interaction.isButton() && interaction.customId === 'add_task') {
       const modal = new ModalBuilder().setCustomId('task_modal').setTitle('タスクを追加');
       modal.addComponents(
