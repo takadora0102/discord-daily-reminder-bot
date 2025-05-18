@@ -99,6 +99,8 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
+      await interaction.deferReply({ ephemeral: true });
+
       const start = sleepSessions.get(userId);
       const end = new Date();
       const duration = Math.round((end - start) / 60000);
@@ -107,7 +109,7 @@ client.on(Events.InteractionCreate, async interaction => {
       const { success, diff, average } = await saveSleepToNotion({ duration, user: userId });
       const message = await buildMorningMessage(userId, duration, diff, average);
 
-      await interaction.reply({ content: message, components: [buildRowMorning()] });
+      await interaction.editReply({ content: message, components: [buildRowMorning()] });
       return;
     }
 
@@ -130,8 +132,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
       await interaction.reply({
         content: '📗 勉強開始しました。終了したら「勉強終了」ボタンを押してください。',
-        components: [row],
-        flags: 64
+        components: [row]
       });
       return;
     }
