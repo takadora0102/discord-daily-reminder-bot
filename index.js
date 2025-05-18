@@ -73,8 +73,34 @@ const buildRowNight = () =>
   );
 client.once('ready', async () => {
   console.log(`✅ Bot started as ${client.user.tag}`);
+
+  const user = await client.users.fetch(TARGET_USER_ID);
+
+  // テスト用の仮データ
+  const message = await buildMorningMessage(TARGET_USER_ID, 420, 15, 390); // 7h, +15分, 平均6.5h
+  await user.send({
+    content: '✅ テスト送信：以下は朝の通知例です',
+    components: [buildRowMorning()]
+  });
+  await user.send({ content: message });
 });
 
+// 朝・昼・夜のニュース通知（cron）
+cron.schedule('1 21 * * 0-6', async () => { // JST 6:01
+  const user = await client.users.fetch(TARGET_USER_ID);
+  const newsText = await getFormattedNews('朝');
+  await user.send(`📰 朝のニュースをお届けします：\n\n${newsText}`);
+});
+cron.schedule('0 3 * * 0-6', async () => { // JST 12:00
+  const user = await client.users.fetch(TARGET_USER_ID);
+  const newsText = await getFormattedNews('昼');
+  await user.send(`📰 昼のニュースをお届けします：\n\n${newsText}`);
+});
+cron.schedule('0 11 * * 0-6', async () => { // JST 20:00
+  const user = await client.users.fetch(TARGET_USER_ID);
+  const newsText = await getFormattedNews('夜');
+  await user.send(`📰 夜のニュースをお届けします：\n\n${newsText}`);
+});
 cron.schedule('0 13 * * 0-6', async () => {
   const user = await client.users.fetch(TARGET_USER_ID);
 
@@ -89,6 +115,7 @@ cron.schedule('0 13 * * 0-6', async () => {
 
   await user.send({ content: message, components: [buildRowNight()] });
 });
+
 client.on(Events.InteractionCreate, async interaction => {
   try {
     const userId = interaction.user.id;
@@ -99,8 +126,6 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      await interaction.deferReply({ ephemeral: true });
-
       const start = sleepSessions.get(userId);
       const end = new Date();
       const duration = Math.round((end - start) / 60000);
@@ -109,10 +134,9 @@ client.on(Events.InteractionCreate, async interaction => {
       const { success, diff, average } = await saveSleepToNotion({ duration, user: userId });
       const message = await buildMorningMessage(userId, duration, diff, average);
 
-      await interaction.editReply({ content: message, components: [buildRowMorning()] });
+      await interaction.reply({ content: message, components: [buildRowMorning()] });
       return;
     }
-
     if (interaction.isButton() && interaction.customId === 'sleep_start') {
       sleepSessions.set(userId, new Date());
       await interaction.reply({ content: '🛌 消灯時間を記録しました。おやすみなさい！', ephemeral: true });
@@ -123,6 +147,7 @@ client.on(Events.InteractionCreate, async interaction => {
       await handleRouteButton(interaction);
       return;
     }
+
     if (interaction.isButton() && interaction.customId === 'study_start') {
       studySessions.set(userId, { start: new Date() });
 
@@ -143,7 +168,6 @@ client.on(Events.InteractionCreate, async interaction => {
         await interaction.reply({ content: '⚠️ 勉強開始記録がありません。', ephemeral: true });
         return;
       }
-
       const now = new Date();
       const duration = Math.round((now - session.start) / 60000);
       studySessions.set(userId, { ...session, duration, date: dayjs().format('YYYY-MM-DD') });
@@ -163,6 +187,7 @@ client.on(Events.InteractionCreate, async interaction => {
       await interaction.reply({ content: '📘 勉強のカテゴリを選択してください：', components: [row], ephemeral: true });
       return;
     }
+
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('study_category')) {
       const [_, uid] = interaction.customId.split('|');
       const session = studySessions.get(uid);
@@ -177,7 +202,6 @@ client.on(Events.InteractionCreate, async interaction => {
       await interaction.update({ content: `✅ ${session.duration}分の勉強を「${category}」として記録しました！`, components: [] });
       return;
     }
-
     if (interaction.isButton() && interaction.customId === 'add_task') {
       const modal = new ModalBuilder().setCustomId('task_modal').setTitle('タスクを追加');
       modal.addComponents(
@@ -205,6 +229,7 @@ client.on(Events.InteractionCreate, async interaction => {
       );
       await interaction.showModal(modal);
     }
+
     if (interaction.isModalSubmit() && interaction.customId === 'task_modal') {
       let title = interaction.fields.getTextInputValue('task_name');
       let deadline = interaction.fields.getTextInputValue('task_deadline');
@@ -213,7 +238,6 @@ client.on(Events.InteractionCreate, async interaction => {
       if (/^\d{8}$/.test(deadline)) {
         deadline = `${deadline.slice(0, 4)}-${deadline.slice(4, 6)}-${deadline.slice(6, 8)}`;
       }
-
       if (!/^\d{4}-\d{2}-\d{2}$/.test(deadline)) {
         await interaction.reply({ content: '⚠️ 期限の形式が不正です。YYYYMMDD または YYYY-MM-DD で入力してください。', ephemeral: true });
         return;
@@ -235,6 +259,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
       await interaction.reply({ content: '🔽 タスクの種類を選んでください：', components: [row], ephemeral: true });
     }
+
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('task_type_select')) {
       const [, uuid] = interaction.customId.split('|');
       const task = pendingTasks.get(uuid);
@@ -242,7 +267,6 @@ client.on(Events.InteractionCreate, async interaction => {
         await interaction.reply({ content: '⚠️ タスク情報が見つかりませんでした。', ephemeral: true });
         return;
       }
-
       const type = interaction.values[0];
       const result = await saveTaskToNotion({
         title: task.title,
