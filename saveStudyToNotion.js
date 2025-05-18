@@ -11,7 +11,8 @@ async function saveStudyToNotion({ duration, category, user }) {
     await notion.pages.create({
       parent: { database_id: DATABASE_ID },
       properties: {
-        User: { title: [{ text: { content: user } }] }, // ✅ title型であること前提
+        // ✅ タイトル型としてNotionに送信（これが重要）
+        User: { title: [{ text: { content: user } }] },
         Date: { date: { start: now.toISOString() } },
         Duration: { number: duration },
         Category: { select: { name: category } }
