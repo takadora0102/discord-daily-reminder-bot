@@ -1,17 +1,18 @@
-const Parser = require('rss-parser');
-const parser = new Parser();
-const fetch = require('node-fetch');
+const Parser   = require('rss-parser');
+const fetch    = require('node-fetch');
+const crypto   = require('crypto');
+const parser   = new Parser();
 
 const feedsByTime = {
   朝: [
-    'http://feeds.bbci.co.uk/news/world/rss.xml',
     'https://jp.reuters.com/rssFeed/topNews',
+    'https://b.hatena.ne.jp/hotentry/it.rss',
     'https://techcrunch.com/feed/'
   ],
   昼: [
-    'https://b.hatena.ne.jp/hotentry/it.rss',
     'https://japan.cnet.com/rss/index.rdf',
-    'https://gigazine.net/news/rss_2.0/'
+    'https://gigazine.net/news/rss_2.0/',
+    'http://feeds.bbci.co.uk/news/world/rss.xml'
   ],
   夜: [
     'https://sorae.info/feed',
@@ -20,51 +21,74 @@ const feedsByTime = {
   ]
 };
 
-async function translate(text, from = 'en', to = 'ja') {
+/* ────────────────── キャッシュ & ユーティリティ ────────────────── */
+const translateCache = new Map();      // key: md5(text) -> 日本語
+const alreadySent    = new Set();      // URL 重複排除 (24h)
+
+const md5 = (s) => crypto.createHash('md5').update(s).digest('hex');
+
+/* ────────────────── 英語判定の改良 ────────────────── */
+function isEnglish(text = '') {
+  const jp = text.match(/[\u3000-\u30FF\u4E00-\u9FFF]/g) || [];
+  const en = text.match(/[A-Za-z]/g) || [];
+  return en.length > jp.length;  // アルファベットが日本語より多ければ英語
+}
+
+/* ────────────────── 翻訳 (タイムアウト・リトライ・キャッシュ) ────────────────── */
+async function translate(text, from = 'en', to = 'ja', retry = 1) {
+  const key = md5(text);
+  if (translateCache.has(key)) return translateCache.get(key);
+
   try {
     const res = await fetch('https://libretranslate.de/translate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ q: text, source: from, target: to, format: 'text' })
+      method  : 'POST',
+      timeout : 7000,                                        // 7 秒で Abort
+      headers : { 'Content-Type': 'application/json' },
+      body    : JSON.stringify({ q: text, source: from, target: to, format: 'text' })
     });
     const data = await res.json();
-    return data.translatedText || text;
+    translateCache.set(key, data.translatedText);
+    return data.translatedText;
   } catch (e) {
-    console.error('❌ 翻訳失敗:', e);
-    return text;
+    if (retry) return translate(text, from, to, retry - 1);  // 1 回だけリトライ
+    console.warn('❌ 翻訳失敗:', e.message);
+    return text;                                             // 最後は原文
   }
 }
 
-function isEnglish(text) {
-  const jaMatch = text.match(/[\u3000-\u30FF\u4E00-\u9FFF]/g);
-  const jaRatio = (jaMatch ? jaMatch.length : 0) / text.length;
-  return jaRatio < 0.3;
-}
-
+/* ────────────────── メイン関数 ────────────────── */
 async function getFormattedNews(label = '朝') {
   const urls = feedsByTime[label] || [];
-  const all = [];
+  const items = [];
 
   for (const url of urls) {
     try {
-      const feed = await parser.parseURL(url);
-      for (const item of feed.items.slice(0, 3)) {
-        let title = item.title?.trim() || '（無題）';
-        let summary = item.contentSnippet?.slice(0, 100) || '';
-        let link = item.link;
+      const feed = await parser.parseURL(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Discord Bot)' }
+      });
 
-        if (isEnglish(title)) title = await translate(title);
+      for (const item of feed.items.slice(0, 4)) {
+        if (alreadySent.has(item.link)) continue;            // 重複除外
+        alreadySent.add(item.link);
+
+        let title   = item.title?.trim()           || '（無題）';
+        let summary = item.contentSnippet?.trim()  || '';
+        if (summary.length > 120) summary = summary.slice(0, 117) + '…';
+
+        if (isEnglish(title)  ) title   = await translate(title);
         if (isEnglish(summary)) summary = await translate(summary);
 
-        all.push(`**${title}**\n${summary}...\n🔗 <${link}>`);
+        items.push(`**${title}**\n${summary}\n🔗 <${item.link}>`);
       }
     } catch (e) {
-      console.warn(`⚠️ ${url} の取得に失敗:`, e.message);
+      console.warn(`⚠️ ${url} 取得失敗: ${e.message}`);
     }
   }
 
-  const shuffled = all.sort(() => 0.5 - Math.random());
-  return shuffled.slice(0, 5).join('\n\n---\n\n');
+  // 直近24h の重複キャッシュを 24h ごとに掃除
+  setTimeout(() => alreadySent.clear(), 86_400_000);
+
+  return items.slice(0, 5);   // 5 本まで返す（長さ制限対策）
 }
 
 module.exports = { getFormattedNews };
