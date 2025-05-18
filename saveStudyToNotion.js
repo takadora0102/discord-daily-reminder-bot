@@ -11,10 +11,10 @@ async function saveStudyToNotion({ duration, category, user }) {
     await notion.pages.create({
       parent: { database_id: DATABASE_ID },
       properties: {
+        User: { title: [{ text: { content: user } }] }, // ✅ title型であること前提
         Date: { date: { start: now.toISOString() } },
         Duration: { number: duration },
-        Category: { select: { name: category } },
-        User: { rich_text: [{ text: { content: user } }] }
+        Category: { select: { name: category } }
       }
     });
 
