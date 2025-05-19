@@ -14,10 +14,10 @@ require('dotenv').config();
 const { v4: uuidv4 } = require('uuid');
 
 /* ────────── .env ────────── */
-const TOKEN          = process.env.TOKEN;
-const CLIENT_ID      = process.env.CLIENT_ID;
-const GUILD_ID       = process.env.GUILD_ID;
-const TARGET_USER_ID = process.env.TARGET_USER_ID;
+const {
+  TOKEN, CLIENT_ID, GUILD_ID,
+  TARGET_USER_ID
+} = process.env;
 
 /* ────────── 自作モジュール ────────── */
 const schedule          = require('./schedule');
@@ -28,6 +28,8 @@ const { saveTaskToNotion }  = require('./saveTaskToNotion');
 const { saveStudyToNotion } = require('./saveStudyToNotion');
 const { saveSleepToNotion } = require('./saveSleepToNotion');
 const { getFormattedNews }  = require('./news');
+const sleepStore            = require('./sleepStore');
+const failedSleepQ          = require('./failedSleepQueue');
 
 /* ────────── Discord クライアント ────────── */
 const client = new Client({
@@ -37,7 +39,6 @@ const client = new Client({
 
 /* ────────── 状態保持 ────────── */
 const studySessions = new Map();   // uid → { start, duration, date }
-const sleepSessions = new Map();   // uid → Date
 const pendingTasks  = new Map();   // uuid → taskObj
 
 /* ────────── UI ビルダー ────────── */
@@ -56,128 +57,124 @@ const buildRowNight = () =>
   );
 
 /* ────────── 朝メッセージ生成 ────────── */
-const buildMorningMessage = async (uid, sleepMin, diff, avg) => {
-  const today    = dayjs().add(9, 'hour');
-  const dayLabel = today.format('dd');
-  const sched    = schedule[dayLabel] || ['（時間割未登録）'];
-  const weather  = await getWeather();
-  const tasks    = await getUpcomingTasks();
+async function buildMorningMessage(uid, sleepMin, diff, avg) {
+  const today = dayjs().add(9, 'hour');
+  const sched = schedule[today.format('dd')] || ['（時間割未登録）'];
+  const weather = await getWeather();
+  const tasks   = await getUpcomingTasks();
 
-  const sleepLine = `🛌 睡眠時間：${Math.floor(sleepMin / 60)}h${sleepMin % 60}m（${diff >= 0 ? '+' : ''}${diff}m）｜週平均：${Math.floor(avg / 60)}h${avg % 60}m`;
+  const line = `🛌 睡眠：${Math.floor(sleepMin/60)}h${sleepMin%60}m（${diff>=0?'+':''}${diff}m）｜週平均:${Math.floor(avg/60)}h${avg%60}m`;
 
   return `おはようございます！今日は ${today.format('MM月DD日（dd）')} です！\n\n` +
-         `${sleepLine}\n\n` +
-         (weather ? `🌤️ 天気：${weather.description}\n🌡️ 最高${weather.tempMax}℃ / 最低${weather.tempMin}℃\n\n` : '') +
-         `📚 今日の時間割:\n${sched.join('\n')}\n\n${tasks}`;
-};
-
-/* ────────── 起動時テスト送信 ────────── */
-client.once('ready', async () => {
-  console.log(`✅ Bot started as ${client.user.tag}`);
-  const user = await client.users.fetch(TARGET_USER_ID);
-  const msg  = await buildMorningMessage(TARGET_USER_ID, 420, 15, 390); // 7h, +15m, avg 6.5h
-  await user.send({ content: '✅ テスト送信：ボタン付き', components: [buildRowMorning()] });
-  await user.send({ content: msg });
-});
+         `${line}\n\n` +
+         (weather ? `🌤️ 天気：${weather.description}\n🌡️ 最${weather.tempMax}℃ / 最低${weather.tempMin}℃\n\n` : '') +
+         `📚 時間割:\n${sched.join('\n')}\n\n${tasks}`;
+}
 
 /* ────────── ニュース送信ヘルパ ────────── */
 const sendNews = label => async () => {
-  console.log(`[NEWS] ${label} タスク`);
-  const user   = await client.users.fetch(TARGET_USER_ID);
-  const blocks = await getFormattedNews(label);         // 配列で取得
+  const user = await client.users.fetch(TARGET_USER_ID);
+  const blocks = await getFormattedNews(label);
   if (!blocks.length) return user.send(`📰 ${label}のニュースは取得できませんでした。`);
 
-  let chunk = '';
-  for (const line of blocks) {
-    if ((chunk + '\n\n' + line).length > 1900) { await user.send(chunk); chunk = line; }
-    else chunk += (chunk ? '\n\n' : '') + line;
+  let buf='';
+  for(const l of blocks){
+    if((buf+'\n\n'+l).length>1900){ await user.send(buf); buf=l; }
+    else buf+=(buf?'\n\n':'')+l;
   }
-  if (chunk) await user.send(chunk);
+  if(buf) await user.send(buf);
 };
 
-/* ────────── cron スケジュール (JST) ────────── */
-cron.schedule('1 6  * * *', sendNews('朝'), { timezone: 'Asia/Tokyo' });
-cron.schedule('0 12 * * *', sendNews('昼'), { timezone: 'Asia/Tokyo' });
-cron.schedule('0 20 * * *', sendNews('夜'), { timezone: 'Asia/Tokyo' });
+/* ────────── cron スケジュール ────────── */
+cron.schedule('1 6  * * *', sendNews('朝'), { timezone:'Asia/Tokyo' });
+cron.schedule('0 12 * * *', sendNews('昼'), { timezone:'Asia/Tokyo' });
+cron.schedule('0 20 * * *', sendNews('夜'), { timezone:'Asia/Tokyo' });
 
 cron.schedule('0 22 * * *', async () => {
-  const user  = await client.users.fetch(TARGET_USER_ID);
+  const user = await client.users.fetch(TARGET_USER_ID);
   const today = dayjs().format('YYYY-MM-DD');
-  const total = [...studySessions.values()]
-    .filter(v => v.date === today)
-    .reduce((a, b) => a + b.duration, 0);
-  await user.send({
-    content: `📘 今日の勉強時間：${Math.floor(total / 60)}h${total % 60}m`,
-    components: [buildRowNight()]
-  });
-}, { timezone: 'Asia/Tokyo' });
+  const total = [...studySessions.values()].filter(v=>v.date===today).reduce((a,b)=>a+b.duration,0);
+  await user.send({ content:`📘 今日の勉強時間：${Math.floor(total/60)}h${total%60}m`, components:[buildRowNight()] });
+},{ timezone:'Asia/Tokyo' });
 
-/* ────────── 通学/帰宅ルート計算ヘルパ ────────── */
-const parseTime  = s => { const [h, m] = s.split(':').map(Number); return h * 60 + m; };
-const formatTime = n => `${String(Math.floor(n / 60)).padStart(2, '0')}:${String(n % 60).padStart(2, '0')}`;
-
-async function handleRouteButton(inter) {
-  const isGo = inter.customId === 'go';
-  const nowMin = dayjs().add(9, 'hour').hour() * 60 + dayjs().minute();
-  const A = isGo ? timetable.weekday.go   : timetable.weekday.back;
-  const B = isGo ? timetable.weekday.back : timetable.weekday.go;
-
-  const aList = A.train     .map(parseTime).filter(t => t >= nowMin);
-  const bList = B.shinkansen.map(parseTime).filter(t => t >= nowMin);
-  const routes = [];
-
-  for (const a of aList) {
-    const arr = a + (isGo ? 8 : 20);
-    const b   = bList.find(x => x >= arr + 1);
-    if (b) {
-      routes.push(`${isGo ? '博多南' : '福工大前'} ${formatTime(a)} → 博多 ${formatTime(b)}`);
-      if (routes.length >= 2) break;
-    }
+/* ────────── ルート案内 ────────── */
+const parseTime = s=>{const[h,m]=s.split(':').map(Number);return h*60+m;};
+const formatTime=n=>`${String(Math.floor(n/60)).padStart(2,'0')}:${String(n%60).padStart(2,'0')}`;
+async function route(inter,isGo){
+  const now=dayjs().add(9,'hour');const nowMin=now.hour()*60+now.minute();
+  const A = isGo?timetable.weekday.go:timetable.weekday.back;
+  const B = isGo?timetable.weekday.back:timetable.weekday.go;
+  const al=A.train.map(parseTime).filter(t=>t>=nowMin);
+  const bl=B.shinkansen.map(parseTime).filter(t=>t>=nowMin);
+  const res=[];
+  for(const a of al){
+    const arr=a+(isGo?8:20);
+    const b=bl.find(x=>x>=arr+1);
+    if(b){res.push(`${isGo?'博多南':'福工大前'} ${formatTime(a)} → 博多 ${formatTime(b)}`);if(res.length>=2)break;}
   }
-  inter.reply({
-    content: routes.length ? `【${isGo ? '通学' : '帰宅'}案内】\n` + routes.join('\n') : '適切なルートが見つかりません',
-    ephemeral: true
-  });
+  inter.reply({ content: res.length?`【${isGo?'通学':'帰宅'}】\n`+res.join('\n'):'ルート無し',ephemeral:true});
 }
 
-/* ────────── Interaction 処理 ────────── */
-client.on(Events.InteractionCreate, async interaction => {
-  try {
-    const uid = interaction.user.id;
+/* ────────── 起動テスト DM ────────── */
+client.once('ready', async()=>{
+  console.log(`✅ Bot started as ${client.user.tag}`);
+  const u=await client.users.fetch(TARGET_USER_ID);
+  const m=await buildMorningMessage(TARGET_USER_ID,420,15,390);
+  await u.send({content:'✅ テスト送信：ボタン付き',components:[buildRowMorning()]});
+  await u.send({content:m});
+});
 
-    /* 起床 → 朝通知 */
-    if (interaction.isButton() && interaction.customId === 'sleep_end') {
-      if (!sleepSessions.has(uid)) return interaction.reply({ content: '⚠️ 消灯記録がありません', ephemeral: true });
-      const dur = Math.round((Date.now() - sleepSessions.get(uid)) / 60000);
-      sleepSessions.delete(uid);
-      const { diff, average } = await saveSleepToNotion({ duration: dur, user: uid });
-      const msg = await buildMorningMessage(uid, dur, diff, average);
-      return interaction.reply({ content: msg, components: [buildRowMorning()] });
-    }
+/* ────────── Interaction ────────── */
+client.on(Events.InteractionCreate,async inter=>{
+  try{
+    const uid=inter.user.id;
 
     /* 消灯 */
-    if (interaction.isButton() && interaction.customId === 'sleep_start') {
-      sleepSessions.set(uid, Date.now());
-      return interaction.reply({ content: '🛌 おやすみなさい！', ephemeral: true });
+    if(inter.isButton()&&inter.customId==='sleep_start'){
+      if(sleepStore.has(uid))
+        return inter.reply({content:'⚠️ すでに就寝記録があります',ephemeral:true});
+      sleepStore.set(uid,Date.now());
+      return inter.reply({content:'🛌 おやすみなさい！',ephemeral:true});
     }
 
-    /* 通学 / 帰宅 */
-    if (interaction.isButton() && (interaction.customId === 'go' || interaction.customId === 'back'))
-      return handleRouteButton(interaction);
+    /* 起床 */
+    if(inter.isButton()&&inter.customId==='sleep_end'){
+      if(!sleepStore.has(uid))
+        return inter.reply({content:'⚠️ 消灯記録がありません',ephemeral:true});
+
+      const dur=Math.round((Date.now()-sleepStore.get(uid))/60000);
+      sleepStore.del(uid);
+
+      if(dur<10||dur>1080)
+        return inter.reply({content:`⚠️ 異常値(${dur}分)。10分〜18hのみ保存`,ephemeral:true});
+
+      const {diff,average,success}=await saveSleepToNotion({duration:dur,user:uid});
+      if(!success) failedSleepQ.push({duration:dur,user:uid,ts:Date.now()});
+      else for(const item of failedSleepQ.drain()) await saveSleepToNotion(item);
+
+      const morning=await buildMorningMessage(uid,dur,diff,average);
+      return inter.reply({content:morning,components:[buildRowMorning()]});
+    }
+
+    /* ルート */
+    if(inter.isButton()&&(inter.customId==='go'||inter.customId==='back'))
+      return route(inter,inter.customId==='go');
 
     /* 勉強開始 */
-    if (interaction.isButton() && interaction.customId === 'study_start') {
-      studySessions.set(uid, { start: Date.now() });
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('study_end').setLabel('勉強終了').setStyle(ButtonStyle.Danger)
-      );
-      return interaction.reply({ content: '📗 勉強開始しました。', components: [row] });
+    if(inter.isButton()&&inter.customId==='study_start'){
+      studySessions.set(uid,{start:Date.now()});
+      const row=new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('study_end').setLabel('勉強終了').setStyle(ButtonStyle.Danger));
+      return inter.reply({content:'📗 勉強開始しました。',components:[row]});
     }
 
+    /* 勉強
     /* 勉強終了 → カテゴリ選択 */
     if (interaction.isButton() && interaction.customId === 'study_end') {
       const sess = studySessions.get(uid);
-      if (!sess) return interaction.reply({ content: '⚠️ 勉強開始記録がありません', ephemeral: true });
+      if (!sess)
+        return interaction.reply({ content: '⚠️ 勉強開始記録がありません', ephemeral: true });
+
       const dur = Math.round((Date.now() - sess.start) / 60000);
       studySessions.set(uid, { ...sess, duration: dur, date: dayjs().format('YYYY-MM-DD') });
 
@@ -185,6 +182,7 @@ client.on(Events.InteractionCreate, async interaction => {
         .setCustomId(`study_cat|${uid}`)
         .setPlaceholder('カテゴリ選択')
         .addOptions(['理論', '機械', '電力', '法規', 'その他'].map(v => ({ label: v, value: v })));
+
       return interaction.reply({
         content: `勉強 ${dur} 分\nカテゴリを選択：`,
         components: [new ActionRowBuilder().addComponents(sel)],
@@ -194,11 +192,12 @@ client.on(Events.InteractionCreate, async interaction => {
 
     /* カテゴリ確定 → Notion 保存 */
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('study_cat')) {
-      const cat  = interaction.values[0];
-      const sess = studySessions.get(uid);
+      const category = interaction.values[0];
+      const sess     = studySessions.get(uid);
       if (!sess) return;
-      await saveStudyToNotion({ duration: sess.duration, category: cat, user: uid });
-      return interaction.update({ content: `✅ ${sess.duration}m を「${cat}」で記録！`, components: [] });
+
+      await saveStudyToNotion({ duration: sess.duration, category, user: uid });
+      return interaction.update({ content: `✅ ${sess.duration}m を「${category}」で記録！`, components: [] });
     }
 
     /* タスク追加モーダル起動 */
@@ -218,44 +217,62 @@ client.on(Events.InteractionCreate, async interaction => {
       return interaction.showModal(modal);
     }
 
-    /* タスクモーダル submit */
+    /* タスクモーダル Submit */
     if (interaction.isModalSubmit() && interaction.customId === 'task_modal') {
-      let title = interaction.fields.getTextInputValue('task_name');
+      let title    = interaction.fields.getTextInputValue('task_name');
       let deadline = interaction.fields.getTextInputValue('task_deadline');
-      const desc = interaction.fields.getTextInputValue('task_description');
+      const desc   = interaction.fields.getTextInputValue('task_description');
 
       if (/^\d{8}$/.test(deadline))
         deadline = `${deadline.slice(0, 4)}-${deadline.slice(4, 6)}-${deadline.slice(6, 8)}`;
       if (!/^\d{4}-\d{2}-\d{2}$/.test(deadline))
-        return interaction.reply({ content: '⚠️ 期限形式が不正', ephemeral: true });
+        return interaction.reply({ content: '⚠️ 期限形式が不正です', ephemeral: true });
 
       const uuid = uuidv4();
       pendingTasks.set(uuid, { title, deadline, desc });
 
-      const sel = new StringSelectMenuBuilder().setCustomId(`task_type|${uuid}`).setPlaceholder('種別を選択')
+      const sel = new StringSelectMenuBuilder().setCustomId(`task_type|${uuid}`)
+        .setPlaceholder('種別を選択')
         .addOptions(['To Do', 'Assignment', 'Test', 'Others'].map(v => ({ label: v, value: v })));
-      return interaction.reply({ content: '🔽 タスク種別を選択：', components: [new ActionRowBuilder().addComponents(sel)], ephemeral: true });
+
+      return interaction.reply({
+        content: '🔽 タスク種別を選択：',
+        components: [new ActionRowBuilder().addComponents(sel)],
+        ephemeral: true
+      });
     }
 
     /* タスク種別確定 → Notion 保存 */
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith('task_type')) {
       const [, uuid] = interaction.customId.split('|');
       const task = pendingTasks.get(uuid);
-      if (!task) return interaction.reply({ content: '⚠️ タスク情報が見つかりません', ephemeral: true });
+      if (!task)
+        return interaction.reply({ content: '⚠️ タスク情報が見つかりません', ephemeral: true });
 
-      const type = interaction.values[0];
-      const res = await saveTaskToNotion({
-        title: task.title, deadline: task.deadline, type, description: task.desc
+      const result = await saveTaskToNotion({
+        title: task.title,
+        deadline: task.deadline,
+        type: interaction.values[0],
+        description: task.desc
       });
       pendingTasks.delete(uuid);
-      return interaction.update({ content: res.success ? '✅ 追加しました' : '❌ 失敗しました', components: [] });
+
+      return interaction.update({
+        content: result.success ? '✅ タスクを追加しました！' : '❌ 追加に失敗しました',
+        components: []
+      });
     }
 
-  } catch (e) { console.error('❌ Interaction Error:', e); }
+  } catch (e) {
+    console.error('❌ Interaction Error:', e);
+  }
 });
 
-/* ────────── Slash コマンド登録 ────────── */
-const commands = [new SlashCommandBuilder().setName('task').setDescription('📝 タスク追加ボタン')].map(c => c.toJSON());
+/* ───────── Slash コマンド登録 ───────── */
+const commands = [
+  new SlashCommandBuilder().setName('task').setDescription('📝 タスク追加ボタン')
+].map(c => c.toJSON());
+
 const rest = new REST({ version: '10' }).setToken(TOKEN);
 (async () => {
   try {
@@ -266,8 +283,10 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
   }
 })();
 
-/* ────────── keep-alive (Render) ────────── */
-require('express')().get('/', (_, res) => res.send('Bot is running.')).listen(process.env.PORT || 3000);
+/* ───────── keep-alive (Render) ───────── */
+require('express')()
+  .get('/', (_, res) => res.send('Bot is running.'))
+  .listen(process.env.PORT || 3000);
 
-/* ────────── 起動 ────────── */
+/* ───────── 起動 ───────── */
 client.login(TOKEN);
